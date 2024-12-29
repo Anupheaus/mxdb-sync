@@ -1,9 +1,11 @@
-import { createComponent, Flex, Grid, GridColumn } from '@anupheaus/react-ui';
-import { addresses, AddressRecord } from '../common';
+import type { TableColumn } from '@anupheaus/react-ui';
+import { createComponent, Flex, Table, useBound } from '@anupheaus/react-ui';
+import type { AddressRecord } from '../common';
+import { addresses } from '../common';
 import { useCollection } from '../../src/client';
 import { useAddNewAddressDialog } from './AddNewAddressDialog';
 
-const columns: GridColumn<AddressRecord>[] = [
+const columns: TableColumn<AddressRecord>[] = [
   { id: 'firstLine', field: 'firstLine', label: 'First Line' },
   { id: 'secondLine', field: 'secondLine', label: 'Second Line' },
   { id: 'city', field: 'city', label: 'City' },
@@ -13,16 +15,18 @@ const columns: GridColumn<AddressRecord>[] = [
 
 export const Addresses = createComponent('Addresses', () => {
   const { gridRequest } = useCollection(addresses);
-  const { AddNewAddressDialog, openAddNewAddressDialog } = useAddNewAddressDialog();
+  // const { AddNewAddressDialog, openAddNewAddressDialog } = useAddNewAddressDialog();
+
+  // const onAdd = useBound(() => { openAddNewAddressDialog(); });
 
   return (
     <Flex tagName="addresses" width={700} height={500}>
-      <Grid<AddressRecord>
+      <Table<AddressRecord>
         columns={columns}
         onRequest={gridRequest()}
-        onAdd={openAddNewAddressDialog}
+      // onAdd={onAdd}
       />
-      <AddNewAddressDialog />
+      {/* <AddNewAddressDialog /> */}
     </Flex>
   );
 });

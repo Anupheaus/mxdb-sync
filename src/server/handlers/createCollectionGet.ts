@@ -1,11 +1,12 @@
 import type { Logger, Record } from '@anupheaus/common';
 import type { MongoDocOf, MXDBSyncedCollection } from '../../common';
-import { useClientIds, useDb } from '../providers';
+import { useDb } from '../providers';
 import { SyncEvents } from '../../common/syncEvents';
+import { useClientTools } from '../hooks';
 
 export function createCollectionGet<RecordType extends Record>(syncCollection: MXDBSyncedCollection<RecordType>, logger: Logger) {
   const { db, fromMongoDoc } = useDb();
-  const { addToClientIds } = useClientIds();
+  const { addToClientIds } = useClientTools();
   const collection = db.collection<MongoDocOf<RecordType>>(syncCollection.name);
 
   return SyncEvents.collection(syncCollection).get.createSocketHandler(async id => {

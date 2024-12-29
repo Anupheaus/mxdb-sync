@@ -92,14 +92,14 @@ import type { CollectionSubscriber } from './createCollectionSubscription';
 
 export const createDistinctSubscriber = <RecordType extends Record = Record>(): CollectionSubscriber<RecordType, DistinctProps<RecordType>> => ({
   subscriptionType: 'distinct',
-  async onChanged({ syncCollection, filter: dataFilter, field, sort, hasClientGotRecordOrId }) {
-    const { db, fromMongoDoc, modifyFilter, modifySort } = useDb();
-    const filter = modifyFilter(dataFilter);
+  async onChanged({ syncCollection, filters, field, sorts, hasClientGotRecordOrId }) {
+    const { db, fromMongoDoc, convertFilter, convertSort } = useDb();
+    const filter = convertFilter(filters);
     const collection = db.collection<MongoDocOf<RecordType>>(syncCollection.name);
     let total: number | undefined;
-    const mongoSort = modifySort(sort);
+    const sort = convertSort(sorts);
     if (field === 'id') field = '_id' as any;
-    const mongoRecords = await collection.aggregate([{ $match: filter }, { $group: { _id: `$${field.toString()}`, doc: { $top: { output: '$$ROOT', sortBy: (mongoSort ?? { '_id': 1 }) } } } }]).toArray();
+    const mongoRecords = await collection.aggregate([{ $match: filter }, { $group: { _id: `$${field.toString()}`, doc: { $top: { output: '$$ROOT', sortBy: sort } } } }]).toArray();
     const records: RecordType[] = [];
     const allRecordIds: string[] = [];
     mongoRecords.forEach(mongoRecord => {

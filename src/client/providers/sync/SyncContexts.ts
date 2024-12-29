@@ -1,14 +1,14 @@
-import type { Record } from '@anupheaus/common';
 import { createContext } from 'react';
-import type { MXDBUpsert } from '../../internalModels';
-import type { MXDBSyncClientRecord } from '../../../common/internalModels';
+import type { MXDBSyncedCollection } from '../../../common';
 
 export interface SyncUtilsContextProps {
-  addToSync(upsert: MXDBUpsert<MXDBSyncClientRecord>, type: 'upsert' | 'remove', records: Record[]): Promise<void>;
+  isValid: boolean;
+  onSyncing(collection: MXDBSyncedCollection, isSyncing: boolean): void;
 }
 
 export const SyncUtilsContext = createContext<SyncUtilsContextProps>({
-  addToSync: () => Promise.resolve(),
+  isValid: false,
+  onSyncing: () => void 0,
 });
 
 export interface SyncContextBusyProps {

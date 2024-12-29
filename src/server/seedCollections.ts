@@ -1,7 +1,7 @@
 import type { MXDBSyncedCollection } from '../common';
 import { configRegistry } from '../common/registries';
 import { useLogger } from './providers';
-import { useCollection } from './useCollection';
+import { useCollection } from './collections';
 
 export async function seedCollections(collections: MXDBSyncedCollection[]) {
   const { logger } = useLogger();

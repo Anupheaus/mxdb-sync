@@ -12,7 +12,7 @@ export function useSyncCollection<RecordType extends Record>(collection: MXDBSyn
   const syncCollection = syncCollectionRegistry.getForClient(collection);
   const result = syncCollection != null ? useCollection(syncCollection, dbName) : undefined;
 
-  const upsertFromServerSync = async (records: RecordType[], syncTime: number = generateSyncTime()): Promise<{ updatableRecords: RecordType[]; notUpdatableRecords: RecordType[]; }> => {
+  const upsert = async (records: RecordType[], syncTime: number = generateSyncTime()): Promise<{ updatableRecords: RecordType[]; notUpdatableRecords: RecordType[]; }> => {
     if (result == null) return { updatableRecords: records, notUpdatableRecords: [] };
 
     const existingSyncRecords = await result.get(records.ids());
@@ -32,16 +32,16 @@ export function useSyncCollection<RecordType extends Record>(collection: MXDBSyn
     return { updatableRecords: syncedRecords, notUpdatableRecords: cannotBeSyncedRecords };
   };
 
-  const upsertFromQuery = async (records: RecordType[], requestTime: number = generateSyncTime()): Promise<RecordType[]> => {
-    if (result == null) return records;
-    const { updatableRecords } = await upsertFromServerSync(records, requestTime);
-    // ignore the cannot be synced records because they have been edited and not yet sync'd.  The server will sync them and do the merging.
-    return updatableRecords;
-  };
+  // const upsertFromQuery = async (records: RecordType[], requestTime: number = generateSyncTime()): Promise<RecordType[]> => {
+  //   if (result == null) return records;
+  //   const { updatableRecords } = await upsertFromServerSync(records, requestTime);
+  //   // ignore the cannot be synced records because they have been edited and not yet sync'd.  The server will sync them and do the merging.
+  //   return updatableRecords;
+  // };
 
   const getAllSyncRecords = async (): Promise<MXDBSyncClientRecord<RecordType>[]> => {
     if (result == null) return [];
-    const { records } = await result.query({ filter: {} });
+    const { records } = await result.query({ filters: {} });
     return records;
   };
 
@@ -64,8 +64,8 @@ export function useSyncCollection<RecordType extends Record>(collection: MXDBSyn
     get isSyncingEnabled() {
       return result != null;
     },
-    upsertFromServerSync,
-    upsertFromQuery,
+    upsert,
+    // upsertFromQuery,
     getAllSyncRecords,
     removeSyncRecords,
     updateSavedFromServerSync,

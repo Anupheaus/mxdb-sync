@@ -1,5 +1,4 @@
-import type { Record } from '@anupheaus/common';
-import type { DistinctProps, QueryProps } from '@anupheaus/mxdb';
+import type { AnyObject, Record } from '@anupheaus/common';
 
 export type MXDBSyncOperationRecordOperation = 'remove' | 'move' | 'replace' | 'add' | 'delete' | 'restore';
 
@@ -29,7 +28,7 @@ export interface MXDBSyncClientRecord<RecordType extends Record = any> extends M
   lastSyncTimestamp: number;
 }
 
-export interface MXDBSyncServerRecord<RecordType extends Record> extends MXDBSyncRecord<RecordType> {
+export interface MXDBSyncServerRecord<RecordType extends Record = Record> extends MXDBSyncRecord<RecordType> {
   original: MXDBSyncRecordOriginal<RecordType>;
 }
 
@@ -54,6 +53,7 @@ export interface MXDBSyncServerRecord<RecordType extends Record> extends MXDBSyn
 export interface MXDBSyncRequestRecord<RecordType extends Record> extends MXDBSyncClientRecord<RecordType> { }
 
 export interface MXDBSyncRequest<RecordType extends Record = any> {
+  collectionName: string;
   records: MXDBSyncRequestRecord<RecordType>[];
 }
 
@@ -63,21 +63,15 @@ export interface MXDBSyncResponse<RecordType extends Record = any> {
   removedIds: string[];
 }
 
-export interface CommonSubscriptionRequest {
+export interface SubscriptionRequest {
+  type: string;
   subscriberId: string;
+  props: AnyObject;
 }
-
-export interface QuerySubscriptionRequest<RecordType extends Record> extends Omit<QueryProps<RecordType>, 'disable'>, CommonSubscriptionRequest {
-  subscriptionType: 'query';
-}
-
-export interface DistinctSubscriptionRequest<RecordType extends Record> extends Omit<DistinctProps<RecordType>, 'disable'>, CommonSubscriptionRequest {
-  subscriptionType: 'distinct';
-}
-
-export type SubscriptionRequest<RecordType extends Record> = QuerySubscriptionRequest<RecordType> | DistinctSubscriptionRequest<RecordType>;
 
 export interface SubscriptionResponse<RecordType extends Record> {
   records: RecordType[];
   total: number;
 }
+
+export const MXDBEndpointSpec = Symbol('MXDBEndpointSpec');

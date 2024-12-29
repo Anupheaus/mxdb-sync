@@ -2,8 +2,9 @@ import type { Logger, Record } from '@anupheaus/common';
 import { is } from '@anupheaus/common';
 import type { MXDBSyncedCollection } from '../../common';
 import type { SocketEmit } from '../providers';
-import { useClientIds, useDb } from '../providers';
+import { useDb } from '../providers';
 import { SyncEvents } from '../../common/syncEvents';
+import { useClientTools } from '../hooks';
 
 export interface CollectionSubscriberProps<RecordType extends Record> {
   syncCollection: MXDBSyncedCollection<RecordType>;
@@ -27,18 +28,17 @@ export interface CollectionSubscriber<RecordType extends Record = Record, Props 
 // eslint-disable-next-line max-len
 export function createCollectionSubscriptionRegister<RecordType extends Record>(syncCollection: MXDBSyncedCollection<RecordType>, subscribers: CollectionSubscriber<RecordType>[], logger: Logger, emit: SocketEmit) {
   const { onWatch } = useDb();
-  const { createHasClientGotRecordId } = useClientIds();
+  const { createHasClientGotRecordOrId } = useClientTools();
 
-  return SyncEvents.collection(syncCollection).subscriptionRegister.createSocketHandler(async ({ subscriptionType, subscriberId, ...props }) => {
-    const hasClientGotRecordId = createHasClientGotRecordId(syncCollection.name);
-    const hasClientGotRecordOrId = (recordOrId: RecordType | string) => is.string(recordOrId) ? hasClientGotRecordId(recordOrId) : hasClientGotRecordId(recordOrId.id);
+  return SyncEvents.collection(syncCollection).subscriptionRegister.createSocketHandler(async ({ type, subscriberId, ...props }) => {
+    const hasClientGotRecordOrId = createHasClientGotRecordOrId(syncCollection.name);
     const state = { previousRecordIds: [] } as { previousRecordIds: string[]; };
-    logger.debug('Subscription registration request', { collection: syncCollection.name, subscriptionType });
+    logger.debug('Subscription registration request', { collection: syncCollection.name, type });
 
     async function informClientOfUpdate(forceUpdate: boolean = false) {
-      const subscriber = subscribers.find(sub => sub.subscriptionType === subscriptionType);
+      const subscriber = subscribers.find(sub => sub.subscriptionType === type);
       if (!subscriber) {
-        logger.error(`Subscriber for subscription type "${subscriptionType}" not found for collection "${syncCollection.name}"`);
+        logger.error(`Subscriber for subscription type "${type}" not found for collection "${syncCollection.name}"`);
         return;
       }
       const { records, total, allRecordIds } = await subscriber.onChanged({ syncCollection, logger, forceUpdate, previousRecordIds: state.previousRecordIds, hasClientGotRecordOrId, ...props });
@@ -47,10 +47,10 @@ export function createCollectionSubscriptionRegister<RecordType extends Record>(
       await SyncEvents.collection(syncCollection).subscriptionUpdate(subscriberId).emit(emit, { records, total });
     }
 
-    onWatch(subscriberId, syncCollection, async ({ type, records: updatedOrRemovedRecords }) => {
+    onWatch(subscriberId, syncCollection, async ({ type: updateType, records: updatedOrRemovedRecords }) => {
       let needsRequery = false;
       let forceUpdate = false;
-      switch (type) {
+      switch (updateType) {
         case 'remove': {
           const removedIds = updatedOrRemovedRecords;
           if (state.previousRecordIds.hasAnyOf(removedIds)) needsRequery = true;

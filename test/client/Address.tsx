@@ -1,6 +1,6 @@
 import { createComponent } from '@anupheaus/react-ui';
-import { useCollection } from '../../src/client';
-import { addresses } from '../common';
+import { useAction, useCollection } from '../../src/client';
+import { addresses, testEndpoint } from '../common';
 
 interface Props {
   id: string;
@@ -9,8 +9,12 @@ interface Props {
 export const Address = createComponent('Address', ({
   id,
 }: Props) => {
+  const { useTest } = useAction(testEndpoint);
   const { useGet } = useCollection(addresses);
   const { record: address } = useGet(id);
+  const { response, isLoading, error } = useTest({ foo: 'hey' });
+
+  console.log('address render', { response: response?.bar, isLoading, error });
 
   return (<>
     <div>{address?.firstLine}</div>

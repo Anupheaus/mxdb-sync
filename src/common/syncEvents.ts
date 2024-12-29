@@ -19,7 +19,7 @@ export const SyncEvents = {
     // distinctUpdateRegister: defineCollectionEvent<DistinctRequest<RecordType>>(`mxdb-sync.${syncCollection.name}.distinctUpdate.register`),
     // distinctUpdate: (handlerId: string) => defineCollectionEvent<RecordType[]>(`mxdb-sync.${syncCollection.name}.distinctUpdate.${handlerId}`),
     // distinctUpdateUnregister: defineCollectionEvent<string>(`mxdb-sync.${syncCollection.name}.distinctUpdate.unregister`),
-    subscriptionRegister: defineCollectionEvent<SubscriptionRequest<RecordType>>(`mxdb-sync.${syncCollection.name}.subscription.register`),
+    subscriptionRegister: defineCollectionEvent<SubscriptionRequest>(`mxdb-sync.${syncCollection.name}.subscription.register`),
     subscriptionUpdate: (subscriberId: string) => defineCollectionEvent<SubscriptionResponse<RecordType>>(`mxdb-sync.${syncCollection.name}.subscriptionUpdate.${subscriberId}`),
     subscriptionUnregister: defineCollectionEvent<string>(`mxdb-sync.${syncCollection.name}.subscription.unregister`),
   }),

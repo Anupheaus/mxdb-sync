@@ -1,4 +1,5 @@
 import type { DataFilters, Record } from '@anupheaus/common';
+import { DataSorts } from '@anupheaus/common';
 import { InternalError, is } from '@anupheaus/common';
 import { Context } from '../../contexts';
 import type { DbContextProps } from './DbContext';
@@ -6,7 +7,6 @@ import type { Collection, Db, Filter, Sort, WithId } from 'mongodb';
 import type { MongoDocOf, MXDBSyncedCollection } from '../../../common';
 import { useLogger } from '../logger';
 import type { MXDBSyncServerRecord } from '../../../common/internalModels';
-import type { SortableField } from '@anupheaus/mxdb';
 
 function toMongoDoc<RecordType extends Record>(record: RecordType): MongoDocOf<RecordType> {
   return (({ id, ...rec }) => ({ ...rec, _id: record.id }))(record) as unknown as MongoDocOf<RecordType>;
@@ -24,7 +24,7 @@ function fromMongoDocs<RecordType extends Record>(records: WithId<MongoDocOf<Rec
   return records.map(fromMongoDoc) as RecordType[];
 }
 
-function modifyFilter<RecordType extends Record>(filter: DataFilters<RecordType> | Filter<RecordType> | undefined): Filter<MongoDocOf<RecordType>> {
+function convertFilter<RecordType extends Record>(filter: DataFilters<RecordType> | Filter<RecordType> | undefined): Filter<MongoDocOf<RecordType>> {
   if (filter == null) return {};
   const mongoFilter = Object.clone(filter) as Filter<MongoDocOf<RecordType>>;
   if (is.plainObject(mongoFilter) && Reflect.has(mongoFilter, 'id')) {
@@ -34,11 +34,13 @@ function modifyFilter<RecordType extends Record>(filter: DataFilters<RecordType>
   return mongoFilter;
 }
 
-function modifySort<RecordType extends Record>(sort: SortableField<RecordType> | undefined): Sort | undefined {
-  if (sort == null) return;
-  if (is.string(sort)) sort = { field: sort, direction: 'asc' };
-  if (sort.field === 'id') sort.field = '_id' as any;
-  return { [sort.field]: sort.direction === 'asc' ? 1 : -1 };
+function convertSort<RecordType extends Record>(sorts: DataSorts<RecordType> | undefined, addDefaultSort = true): Sort {
+  const strictSorts = DataSorts.toArray(sorts);
+  if (addDefaultSort && strictSorts.length === 0) strictSorts.push(['id', 'asc']);
+  return strictSorts.reduce((acc, [field, direction]) => ({
+    ...acc,
+    [field === 'id' ? '_id' : field]: direction === 'desc' ? -1 : 1,
+  }), {});
 }
 
 async function getMatchingRecordsById<RecordType extends Record>(collection: Collection<MongoDocOf<RecordType>>, ids: string[]): Promise<RecordType[]> {
@@ -91,7 +93,7 @@ export function useDb() {
     toMongoDocs,
     fromMongoDoc,
     fromMongoDocs,
-    modifyFilter,
-    modifySort,
+    convertFilter,
+    convertSort,
   };
 }

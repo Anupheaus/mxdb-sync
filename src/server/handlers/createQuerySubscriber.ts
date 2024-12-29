@@ -100,13 +100,13 @@ import type { CollectionSubscriber } from './createCollectionSubscription';
 
 export const createQuerySubscriber = <RecordType extends Record = Record>(): CollectionSubscriber<RecordType, QueryProps<RecordType>> => ({
   subscriptionType: 'query',
-  async onChanged({ syncCollection, filter: dataFilter, pagination, sort, hasClientGotRecordOrId }) {
-    const { db, fromMongoDoc, modifyFilter, modifySort } = useDb();
-    const filter = modifyFilter(dataFilter);
+  async onChanged({ syncCollection, filters: dataFilter, pagination, sorts, hasClientGotRecordOrId }) {
+    const { db, fromMongoDoc, convertFilter, convertSort } = useDb();
+    const filter = convertFilter(dataFilter);
     const collection = db.collection<MongoDocOf<RecordType>>(syncCollection.name);
     let total: number | undefined;
     if (pagination != null) total = await collection.countDocuments(filter);
-    const mongoSort = modifySort(sort);
+    const mongoSort = convertSort(sorts);
     let filterResult = collection.find(filter);
     if (mongoSort != null) filterResult = filterResult.sort(mongoSort);
     if (pagination != null) {

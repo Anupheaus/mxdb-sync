@@ -1,13 +1,14 @@
 import type { MXDBSyncedCollection } from '../common';
 import { useSync } from './providers';
 import type { Record } from '@anupheaus/common';
-import { useDataCollection } from './useInternalCollections';
+import { useDataCollection, useSyncCollection } from './useInternalCollections';
 import { useLogger } from './logger';
 
 export function createUpsert<RecordType extends Record>(collection: MXDBSyncedCollection<RecordType>, dbName?: string) {
   const logger = useLogger();
   const { upsert: mxdbUpsert } = useDataCollection(collection, dbName);
-  const { addToSync, finishSyncing } = useSync(collection);
+  const { upsert: syncUpsert } = useSyncCollection(collection, dbName);
+  const { finishSyncing } = useSync();
 
   async function upsert(record: RecordType): Promise<void>;
   async function upsert(records: RecordType[]): Promise<void>;
@@ -18,7 +19,7 @@ export function createUpsert<RecordType extends Record>(collection: MXDBSyncedCo
     logger.debug('Upserting records...', records);
     await mxdbUpsert(records);
     logger.debug('Upserting sync records...', records);
-    await addToSync('upsert', records);
+    await syncUpsert(records);
     logger.debug('Upsert completed.');
   }
 

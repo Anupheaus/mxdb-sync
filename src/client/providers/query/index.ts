@@ -1,1 +1,1 @@
-export * from './useRemoteQuery';
+export * from './useQuerySubscription';

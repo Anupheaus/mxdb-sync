@@ -1,9 +1,11 @@
 import type { Record } from '@anupheaus/common';
 import { is } from '@anupheaus/common';
-import { useUserData } from '../userData';
+import { useUserData } from '../providers/userData';
+import type { MongoDocOf } from '../../common';
 
-export function useClientIds() {
+export function useClientTools() {
   const { isDataAvailable, getData } = useUserData();
+
   if (!isDataAvailable()) throw new Error('Client ids were requested but UserData was not available at this location.');
 
   function getClientIds(collectionName: string): Set<string> {
@@ -18,9 +20,16 @@ export function useClientIds() {
     });
   }
 
-  function createHasClientGotRecordId(collectionName: string) {
+  function createHasClientGotRecordOrId(collectionName: string) {
     const clientIds = getClientIds(collectionName);
-    return (id: string) => clientIds.has(id);
+    return (id: string | Record | MongoDocOf<Record>) => {
+      if (is.string(id)) return clientIds.has(id);
+      if (is.object(id)) {
+        if ('id' in id) return clientIds.has(id.id);
+        if ('_id' in id) return clientIds.has(id._id);
+      }
+      return false;
+    };
   }
 
   function createFilterRecordsByIds<RecordType extends Record>(collectionName: string) {
@@ -35,10 +44,15 @@ export function useClientIds() {
     return createFilterRecordsByIds<RecordType>(collectionName)(records);
   }
 
+  async function pushRecords<RecordType extends Record>(collectionName: string, records: (RecordType | MongoDocOf<RecordType>)[]): Promise<void> {
+    addToClientIds(collectionName, records.ids());
+  }
+
   return {
     addToClientIds,
-    createHasClientGotRecordId,
+    createHasClientGotRecordOrId,
     filterRecordsByIds,
     createFilterRecordsByIds,
+    pushRecords
   };
 }

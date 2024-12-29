@@ -1,14 +1,14 @@
 import type { Logger, Record } from '@anupheaus/common';
-import type { MXDBSyncedCollection, QueryResponse } from '../common';
-import { useRemoteQuery, useSync } from './providers';
+import type { MXDBSyncedCollection } from '../common';
+import { useQuerySubscription, useSync } from './providers';
 import { useDataCollection } from './useInternalCollections';
-import type { QueryProps } from '@anupheaus/mxdb';
+import type { QueryProps, QueryResponse } from '@anupheaus/mxdb';
 import { useRef } from 'react';
 
 export function createQuery<RecordType extends Record>(collection: MXDBSyncedCollection<RecordType>, dbName: string | undefined, logger: Logger) {
-  const { finishSyncing } = useSync(collection, dbName);
-  const { query: dataQuery, upsert: dataUpsert } = useDataCollection(collection, dbName);
-  const { query: remoteQuery } = useRemoteQuery(collection, dbName);
+  const { finishSyncing } = useSync();
+  const { query: dataQuery } = useDataCollection(collection, dbName);
+  const { query: remoteQuery } = useQuerySubscription(collection);
   const stateRef = useRef<QueryResponse<RecordType>>({ records: [], total: 0 });
   const serverTotalRef = useRef<number>();
 
@@ -30,12 +30,9 @@ export function createQuery<RecordType extends Record>(collection: MXDBSyncedCol
       });
 
       await remoteQuery({
-        collection,
-        dbName,
         props,
         disable,
-        dataUpsert,
-        onUpdate: ({ total }) => {
+        onUpdate: total => {
           if (serverTotalRef.current === total) return;
           serverTotalRef.current = total;
           if (stateRef.current.total === total) return;
@@ -52,4 +49,4 @@ export function createQuery<RecordType extends Record>(collection: MXDBSyncedCol
 }
 
 export type Query<RecordType extends Record> = ReturnType<typeof createQuery<RecordType>>;
-export type QueryPropsFilter<RecordType extends Record> = QueryProps<RecordType>['filter'];
+export type QueryPropsFilters<RecordType extends Record> = QueryProps<RecordType>['filters'];

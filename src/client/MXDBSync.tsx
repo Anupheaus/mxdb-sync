@@ -1,13 +1,13 @@
 import { createComponent } from '@anupheaus/react-ui';
 import type { ReactNode } from 'react';
 import { useLayoutEffect, useState } from 'react';
-import { SyncProvider, SocketProvider } from './providers';
+import { SyncProvider, SocketProvider, SyncCollection, CollectionsProvider, PushCollection } from './providers';
 import type { MXDBSyncedCollection } from '../common';
 import type { MXDBCollection } from '@anupheaus/mxdb';
 import { MXDB } from '@anupheaus/mxdb';
 import { LoggerProvider } from './logger';
 import { configRegistry, syncCollectionRegistry } from '../common/registries';
-import { RemoteQueryProvider } from './providers/query/RemoteQueryProvider';
+import { QuerySubscriptionProvider } from './providers/query/QuerySubscriptionProvider';
 
 interface Props {
   name: string;
@@ -43,10 +43,14 @@ export const MXDBSync = createComponent('MXDBSync', ({
     <LoggerProvider>
       <SocketProvider>
         <MXDB name={name} collections={mxdbCollections}>
-          <SyncProvider collections={collections}>
-            <RemoteQueryProvider>
+          <SyncProvider>
+            <CollectionsProvider collections={collections}>
+              <SyncCollection />
+              <PushCollection />
+            </CollectionsProvider>
+            <QuerySubscriptionProvider>
               {children}
-            </RemoteQueryProvider>
+            </QuerySubscriptionProvider>
           </SyncProvider>
         </MXDB>
       </SocketProvider>

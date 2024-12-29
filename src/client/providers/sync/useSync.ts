@@ -1,17 +1,16 @@
 import { useContext, useLayoutEffect, useRef } from 'react';
-import { SyncUtilsContext, SyncContextBusy } from './SyncContexts';
-import type { MXDBSyncedCollection } from '../../../common';
-import { useCollection } from '@anupheaus/mxdb';
-import type { DeferredPromise, Record } from '@anupheaus/common';
-import { useBound } from '@anupheaus/react-ui';
-import { syncCollectionRegistry } from '../../../common/registries';
+import { SyncContextBusy } from './SyncContexts';
+// import type { MXDBSyncedCollection } from '../../../common';
+// import { useCollection } from '@anupheaus/mxdb';
+import type { DeferredPromise } from '@anupheaus/common';
+// import { syncCollectionRegistry } from '../../../common/registries';
 
-export function useSync<RecordType extends Record>(collection: MXDBSyncedCollection<RecordType>, dbName?: string) {
-  const { addToSync: ctxAddToSync } = useContext(SyncUtilsContext);
-  const syncCollection = syncCollectionRegistry.getForClient(collection);
-  const { upsert = undefined } = syncCollection != null ? useCollection(syncCollection, dbName) : {};
+export function useSync(/*collection: MXDBSyncedCollection<RecordType>, dbName?: string*/) {
+  // const { addToSync: ctxAddToSync } = useContext(SyncUtilsContext);
+  // const syncCollection = syncCollectionRegistry.getForClient(collection);
+  // const { upsert = undefined } = syncCollection != null ? useCollection(syncCollection, dbName) : {};
 
-  const addToSync = useBound((type: 'upsert' | 'remove', records: RecordType[]) => upsert != null ? ctxAddToSync(upsert, type, records) : void 0);
+  // const addToSync = useBound((type: 'upsert' | 'remove', records: RecordType[]) => upsert != null ? ctxAddToSync(upsert, type, records) : void 0);
 
   return {
     get isSyncing() { return useContext(SyncContextBusy).getIsSyncing(); },
@@ -34,6 +33,6 @@ export function useSync<RecordType extends Record>(collection: MXDBSyncedCollect
         return currentSyncPromiseRef.current;
       };
     },
-    addToSync,
+    // addToSync,
   };
 }

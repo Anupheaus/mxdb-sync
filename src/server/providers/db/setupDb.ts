@@ -1,4 +1,5 @@
 import type { Logger } from '@anupheaus/common';
+import type { Db } from 'mongodb';
 import { MongoClient } from 'mongodb';
 import { useLogger } from '../logger';
 import { WatchStream } from './WatchStream';
@@ -6,6 +7,13 @@ import { Context } from '../../contexts';
 import type { DbContextProps } from './DbContext';
 import { useUserData } from '../userData';
 import { useSocket } from '../socket';
+
+async function clearDatabase(db: Db) {
+  const collections = await db.collections();
+  for (const collection of collections) {
+    await collection.drop();
+  }
+}
 
 async function connectToDb(mongoDbName: string, mongoDbUrl: string, logger: Logger) {
   const client = new MongoClient(mongoDbUrl);
@@ -24,7 +32,7 @@ async function connectToDb(mongoDbName: string, mongoDbUrl: string, logger: Logg
   }
 }
 
-export async function setupDb(mongoDbName: string, mongoDbUrl: string, clearDatabase: boolean) {
+export async function setupDb(mongoDbName: string, mongoDbUrl: string, shouldClearDatabase: boolean) {
   const { logger } = useLogger();
   const { getData, isDataAvailable } = useUserData();
   const { onClientConnected } = useSocket();
@@ -58,12 +66,7 @@ export async function setupDb(mongoDbName: string, mongoDbUrl: string, clearData
     await connectToDb(mongoDbName, mongoDbUrl, logger);
     logger.info('Connected to database successfully.');
     const db = client.db(mongoDbName);
-    if (clearDatabase) {
-      const collections = await db.collections();
-      for (const collection of collections) {
-        await collection.drop();
-      }
-    }
+    if (shouldClearDatabase) await clearDatabase(db);
     const watchStream = new WatchStream(db);
 
     const registerWatchWithClient = (watchId: string) => {
@@ -90,7 +93,7 @@ export async function setupDb(mongoDbName: string, mongoDbUrl: string, clearData
       removeWatch: watchStream.removeWatch,
     });
   } catch (error) {
+    logger.error('An unexpected error has occurred with the database.', { error });
     await client.close();
-    throw error;
   }
 }

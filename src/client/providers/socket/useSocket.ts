@@ -14,11 +14,10 @@ export function useSocket() {
     return socket.emitWithAck(event, data);
   });
 
-  const on = useBound(<DataType = unknown, ReturnType = unknown>(event: string, callback: (data: DataType) => ReturnType) => {
-    const socket = getSocket();
-    if (socket == null) throw new InternalError('Socket is not connected');
+  const on = useBound(<DataType = unknown, ReturnType = unknown>(event: string, callback: (data: DataType) => ReturnType) => onConnectionStateChange((_ignore, socket) => {
+    if (socket == null) return;
     socket.on(event, (data, response) => response(callback(data)));
-  });
+  }));
 
   const onConnected = (callback: (socket: Socket) => void, debugId?: string) => onConnectionStateChange((_result, socket) => {
     if (socket) callback(socket);

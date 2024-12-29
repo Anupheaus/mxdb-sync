@@ -1,32 +1,28 @@
 import { createComponent } from '@anupheaus/react-ui';
 import { useSocket } from '../socket';
-import type { Record } from '@anupheaus/common';
-import { generateSyncTime, type MXDBSyncedCollection } from '../../../common';
+import { generateSyncTime } from '../../../common';
 import { SyncEvents } from '../../../common/syncEvents';
 import { useDataCollection, useSyncCollection } from '../../useInternalCollections';
 import { useLogger } from '../../logger';
 import { DateTime } from 'luxon';
-import { useRef } from 'react';
+import { useContext, useRef } from 'react';
+import { useCurrentCollection } from '../collection';
+import { SyncUtilsContext } from './SyncContexts';
 
-interface Props {
-  collection: MXDBSyncedCollection<Record>;
-  onSyncUpdate(collection: MXDBSyncedCollection, isSyncing: boolean): void;
-}
-
-export const SyncCollection = createComponent('SyncCollection', ({
-  collection,
-  onSyncUpdate,
-}: Props) => {
+export const SyncCollection = createComponent('SyncCollection', () => {
   const { onConnected } = useSocket();
+  const collection = useCurrentCollection();
+  const { onSyncing } = useContext(SyncUtilsContext);
   const logger = useLogger(collection.name);
   const { upsert: upsertDataRecords, remove: removeDataRecords, clear: clearDataRecords, getCount } = useDataCollection(collection);
-  const { isSyncingEnabled, getAllSyncRecords, upsertFromServerSync, removeSyncRecords, updateSavedFromServerSync } = useSyncCollection(collection);
+  const { isSyncingEnabled, getAllSyncRecords, upsert: upsertSyncRecords, removeSyncRecords, updateSavedFromServerSync } = useSyncCollection(collection);
   const syncRequestIdRef = useRef('');
 
   onConnected(async socket => {
     if (!isSyncingEnabled) return;
     const syncRequestId = syncRequestIdRef.current = Math.uniqueId();
-    onSyncUpdate(collection, true);
+
+    onSyncing(collection, true);
     logger.info('Synchronising records...');
     const timeStarted = DateTime.now();
     let syncCancelled = false;
@@ -35,7 +31,7 @@ export const SyncCollection = createComponent('SyncCollection', ({
         logger.debug('Current sync request has been cancelled because a newer request has occurred.');
         syncCancelled = true;
         clearInterval(interval);
-        onSyncUpdate(collection, false);
+        onSyncing(collection, false);
         return;
       }
       const timeTaken = DateTime.now().diff(timeStarted);
@@ -43,7 +39,7 @@ export const SyncCollection = createComponent('SyncCollection', ({
         logger.error('Sync took too long, cancelling...');
         syncCancelled = true;
         clearInterval(interval);
-        onSyncUpdate(collection, false);
+        onSyncing(collection, false);
         return;
       }
       logger.debug('Still synchronising records...', { timeTaken: timeTaken.toFormat('mm:ss') });
@@ -68,7 +64,7 @@ export const SyncCollection = createComponent('SyncCollection', ({
       }
       if (updated.length > 0) {
         await upsertDataRecords(updated);
-        await upsertFromServerSync(updated, syncTime);
+        await upsertSyncRecords(updated, syncTime);
         if (syncCancelled) return;
       }
       if (savedIds.length > 0) {
@@ -79,7 +75,7 @@ export const SyncCollection = createComponent('SyncCollection', ({
       if (!syncCancelled) {
         clearInterval(interval);
         logger.info('Finished synchronising records.');
-        onSyncUpdate(collection, false);
+        onSyncing(collection, false);
       }
     }
   });

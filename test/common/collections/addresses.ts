@@ -25,7 +25,8 @@ export const addresses = defineCollection<AddressRecord>({
   name: 'addresses',
   indexes: [],
   version: 1,
-  onSeed: async ({ upsert, getRecordCount }) => {
+  onSeed: async useCollection => {
+    const { upsert, getRecordCount } = useCollection(addresses);
     const recordCount = await getRecordCount();
     if (recordCount >= totalRequired) return;
 

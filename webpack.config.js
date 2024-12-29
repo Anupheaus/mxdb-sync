@@ -40,9 +40,9 @@ const generateSettings = (name, isDev) => ({
     alias: {
       'react': path.join(__dirname, './node_modules/react'),
       'react-dom': path.join(__dirname, './node_modules/react-dom'),
-      '@anupheaus/mxdb/common': path.join(__dirname, '../mxdb/src/defineCollection'),
-      '@anupheaus/mxdb': path.join(__dirname, '../mxdb/src'),
       ...isDev ? {
+        '@anupheaus/mxdb/common': path.join(__dirname, '../mxdb/src/defineCollection'),
+        '@anupheaus/mxdb': path.join(__dirname, '../mxdb/src'),
         '@anupheaus/common': path.join(__dirname, '../common/src'),
         '@anupheaus/react-ui': path.join(__dirname, '../react-ui/src'),
       } : {},

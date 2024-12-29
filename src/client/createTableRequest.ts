@@ -9,7 +9,7 @@ interface TableRequestProps {
 
 export function createTableRequest<RecordType extends Record>(query: Query<RecordType>) {
   return ({ debounceTimer = 200 }: TableRequestProps = {}): TableOnRequest<RecordType> => useDebounce(async ({ requestId, ...request }, onResponse) => {
-    const filter = {} as DataFilters<RecordType>;
-    query({ filter, sort: 'id' as any, ...request }, response => onResponse({ ...response, requestId }));
+    const filters = {} as DataFilters<RecordType>;
+    query({ filters, sorts: 'id', ...request }, response => onResponse({ ...response, requestId }));
   }, debounceTimer);
 }

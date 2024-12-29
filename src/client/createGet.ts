@@ -7,8 +7,8 @@ import { SyncEvents } from '../common/syncEvents';
 export function createGet<RecordType extends Record>(collection: MXDBSyncedCollection<RecordType>, dbName?: string) {
   const { isConnected, emit } = useSocket();
   const { get, upsert } = useDataCollection(collection, dbName);
-  const { upsertFromQuery } = useSyncCollection(collection, dbName);
-  const { finishSyncing } = useSync(collection);
+  const { upsert: upsertSyncRecords } = useSyncCollection(collection, dbName);
+  const { finishSyncing } = useSync();
 
   return async (id: string) => {
     await finishSyncing();
@@ -18,7 +18,7 @@ export function createGet<RecordType extends Record>(collection: MXDBSyncedColle
         record = await SyncEvents.collection(collection).get.emit(emit, id);
         if (record != null) {
           upsert(record);
-          upsertFromQuery([record], Date.now());
+          upsertSyncRecords([record]);
         }
       }
     }

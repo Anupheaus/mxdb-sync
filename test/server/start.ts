@@ -7,6 +7,7 @@ import http from 'http';
 import { configureViews } from './configureViews';
 import { configureStaticFiles } from './configureStaticFiles';
 import { collections } from '../common';
+import { actions } from './configureActions';
 
 const mongoDbName = process.env.MONGO_DB_NAME as string;
 const mongoDbUrl = process.env.MONGO_DB_URI as string;
@@ -19,6 +20,7 @@ async function start() {
   const { app } = await startServer({
     logger,
     collections,
+    actions,
     server,
     mongoDbName,
     mongoDbUrl,

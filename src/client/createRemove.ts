@@ -2,11 +2,12 @@ import type { MXDBSyncedCollection } from '../common';
 import { useSync } from './providers';
 import type { Record } from '@anupheaus/common';
 import { is } from '@anupheaus/common';
-import { useDataCollection } from './useInternalCollections';
+import { useDataCollection, useSyncCollection } from './useInternalCollections';
 
 export function createRemove<RecordType extends Record>(collection: MXDBSyncedCollection<RecordType>, dbName?: string) {
   const { remove: mxdbRemove, get: mxdbGet } = useDataCollection(collection, dbName);
-  const { addToSync, finishSyncing } = useSync(collection);
+  const { removeSyncRecords } = useSyncCollection(collection, dbName);
+  const { finishSyncing } = useSync();
 
   async function remove(id: string): Promise<void>;
   async function remove(ids: string[]): Promise<void>;
@@ -27,7 +28,7 @@ export function createRemove<RecordType extends Record>(collection: MXDBSyncedCo
       if (recordIds.length > 0) records = records.concat(await mxdbGet(recordIds));
     }
     await mxdbRemove(records);
-    await addToSync('remove', records);
+    await removeSyncRecords(records.ids());
   }
 
   return remove;

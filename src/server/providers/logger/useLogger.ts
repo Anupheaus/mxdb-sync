@@ -1,13 +1,6 @@
-import { Context } from '../../contexts';
-import { createRequestLogger } from './createRequestLogger';
-import { LoggerContextProps } from './loggerContext';
+import { LoggerContext } from './loggerContext';
+import { getGlobalLogger } from './setupLogger';
 
 export function useLogger() {
-  const { logger } = Context.get<LoggerContextProps>('logger');
-  let requestLogging: ReturnType<typeof createRequestLogger> | undefined;
-
-  return {
-    logger,
-    get requestLogging() { return requestLogging = requestLogging ?? createRequestLogger(logger); },
-  };
+  return LoggerContext.getStore() ?? getGlobalLogger();
 }

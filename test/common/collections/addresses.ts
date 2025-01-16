@@ -10,6 +10,17 @@ export interface AddressRecord {
   postcode: string;
 }
 
+export namespace AddressRecord {
+  export const create = (): AddressRecord => ({
+    id: Math.uniqueId(),
+    firstLine: '',
+    secondLine: '',
+    city: '',
+    county: '',
+    postcode: '',
+  });
+}
+
 export const officeAddress: AddressRecord = {
   id: 'f67089d8-f658-4db0-919d-e6235fe3ead6',
   firstLine: 'Unit 5, 227 Derby Road',
@@ -19,7 +30,7 @@ export const officeAddress: AddressRecord = {
   postcode: 'DE21 6SY',
 };
 
-const totalRequired = 200;
+const totalRequired = 10;
 
 export const addresses = defineCollection<AddressRecord>({
   name: 'addresses',

@@ -3,7 +3,7 @@ import { createComponent, Flex, Table, useBound } from '@anupheaus/react-ui';
 import type { AddressRecord } from '../common';
 import { addresses } from '../common';
 import { useCollection } from '../../src/client';
-import { useAddNewAddressDialog } from './AddNewAddressDialog';
+import { useAddressDialog } from './AddressDialog';
 
 const columns: TableColumn<AddressRecord>[] = [
   { id: 'firstLine', field: 'firstLine', label: 'First Line' },
@@ -14,19 +14,22 @@ const columns: TableColumn<AddressRecord>[] = [
 ];
 
 export const Addresses = createComponent('Addresses', () => {
-  const { gridRequest } = useCollection(addresses);
-  // const { AddNewAddressDialog, openAddNewAddressDialog } = useAddNewAddressDialog();
+  const { gridRequest, upsert } = useCollection(addresses);
+  const { AddressDialog, openAddressDialog } = useAddressDialog();
 
-  // const onAdd = useBound(() => { openAddNewAddressDialog(); });
+  const onAdd = useBound(async () => { await openAddressDialog(undefined, upsert); });
+
+  const onEdit = useBound(async (address: AddressRecord) => { await openAddressDialog(address, upsert); });
 
   return (
     <Flex tagName="addresses" width={700} height={500}>
       <Table<AddressRecord>
         columns={columns}
         onRequest={gridRequest()}
-      // onAdd={onAdd}
+        onEdit={onEdit}
+        onAdd={onAdd}
       />
-      {/* <AddNewAddressDialog /> */}
+      <AddressDialog />
     </Flex>
   );
 });

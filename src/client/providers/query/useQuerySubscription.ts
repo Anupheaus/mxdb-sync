@@ -27,7 +27,8 @@ export function useQuerySubscription<RecordType extends Record>(collection: MXDB
       onUpdate(undefined);
     } else {
       if (isConnected()) {
-        subscribe({ collectionName: collection.name, ...props });
+        const hash = Object.hash({ collectionName: collection.name, ...props });
+        subscribe({ collectionName: collection.name, ...props }, hash);
       } else {
         onUpdate(undefined);
       }

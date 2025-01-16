@@ -5,8 +5,7 @@ import { useLogger } from '../logger';
 import { WatchStream } from './WatchStream';
 import { Context } from '../../contexts';
 import type { DbContextProps } from './DbContext';
-import { useUserData } from '../userData';
-import { useSocket } from '../socket';
+import { useClient, useSocket } from '../socket';
 
 async function clearDatabase(db: Db) {
   const collections = await db.collections();
@@ -33,8 +32,7 @@ async function connectToDb(mongoDbName: string, mongoDbUrl: string, logger: Logg
 }
 
 export async function setupDb(mongoDbName: string, mongoDbUrl: string, shouldClearDatabase: boolean) {
-  const { logger } = useLogger();
-  const { getData, isDataAvailable } = useUserData();
+  const logger = useLogger();
   const { onClientConnected } = useSocket();
   const client = new MongoClient(mongoDbUrl);
 
@@ -70,13 +68,14 @@ export async function setupDb(mongoDbName: string, mongoDbUrl: string, shouldCle
     const watchStream = new WatchStream(db);
 
     const registerWatchWithClient = (watchId: string) => {
-      if (!isDataAvailable()) return;
+      const { getData } = useClient();
       const watches = getData<Set<string>>('watches', () => new Set());
       watches.add(watchId);
     };
 
-    onClientConnected(({ logger: clientLogger }) => () => {
-      if (!isDataAvailable()) return;
+    onClientConnected(() => () => {
+      const { getData } = useClient();
+      const clientLogger = useLogger();
       const watches = getData<Set<string>>('watches');
       if (watches == null) return;
       clientLogger.debug('Removing client database watches...', { watchCount: watches.size });
@@ -87,8 +86,9 @@ export async function setupDb(mongoDbName: string, mongoDbUrl: string, shouldCle
     Context.set<DbContextProps>('db', {
       db,
       onWatch: (watchId, collection, callback) => {
+        const { provideClient } = useClient();
         registerWatchWithClient(watchId);
-        watchStream.addWatch(watchId, collection.name, callback);
+        watchStream.addWatch(watchId, collection.name, provideClient(callback));
       },
       removeWatch: watchStream.removeWatch,
     });

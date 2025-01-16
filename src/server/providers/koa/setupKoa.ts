@@ -1,15 +1,14 @@
 import { Context } from '../../contexts';
 import Koa from 'koa';
 import bodyParser from 'koa-bodyparser';
-import { useLogger } from '../logger';
-import { AnyHttpServer } from '../../internalModels';
-import { KoaContextProps } from './koaContexts';
+import { createRequestLogger } from '../logger';
+import type { AnyHttpServer } from '../../internalModels';
+import type { KoaContextProps } from './koaContexts';
 
 export function setupKoa(server: AnyHttpServer) {
   const app = new Koa();
-  const { requestLogging } = useLogger();
   app.use(bodyParser());
-  app.use(requestLogging);
+  app.use(createRequestLogger());
 
   Context.set<KoaContextProps>('koa', { app, server });
 

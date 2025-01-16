@@ -39,4 +39,11 @@ export interface MXDBSyncedCollectionConfig<RecordType extends Record = any> ext
   onSeed?(useCollection: UseCollection): Promise<void>;
 }
 
+export interface UpsertRequest {
+  collectionName: string;
+  records: Record[];
+}
+
+export type UpsertResponse = string[];
+
 export { QueryProps, DistinctProps };

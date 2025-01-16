@@ -10,6 +10,8 @@ function a<Request, Response>(_request: Request, _response?: (response: Response
 }
 
 export type UseAction<Name extends string, Request, Response> = {
+  isConnected(): boolean;
+} & {
   [P in Name]: typeof a<Request, Response>;
 } & {
   [P in `use${Capitalize<Name>}`]: (request: Request) => { response: Response | undefined; error: Error | undefined; isLoading: boolean; };
@@ -18,7 +20,7 @@ export type UseAction<Name extends string, Request, Response> = {
 export type GetUseActionType<ActionType extends MXDBAction<any, any, any>> = ActionType extends MXDBAction<infer Name, infer Request, infer Response> ? UseAction<Name, Request, Response>[Name] : never;
 
 export function useAction<Name extends string, Request, Response>(action: MXDBAction<Name, Request, Response>): UseAction<Name, Request, Response> {
-  const { emit } = useSocket();
+  const { isConnected, emit } = useSocket();
   return {
     [action.name]: async (request: Request, response?: (response: Response) => void) => {
       if (typeof (response) === 'function') {
@@ -55,5 +57,6 @@ export function useAction<Name extends string, Request, Response>(action: MXDBAc
         },
       };
     },
+    isConnected,
   } as UseAction<Name, Request, Response>;
 }

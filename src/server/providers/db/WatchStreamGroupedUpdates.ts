@@ -1,4 +1,4 @@
-import { ChangeStreamDocument } from 'mongodb';
+import type { ChangeStreamDocument } from 'mongodb';
 
 interface Props {
   collectionName: string;

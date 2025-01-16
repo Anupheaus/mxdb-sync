@@ -60,7 +60,7 @@ function getCollections(db: Db) {
 
 async function bulkWrite<RecordType extends Record>(collection: Collection<MongoDocOf<RecordType>>, records: RecordType[]): Promise<void> {
   if (records.length === 0) return;
-  const { logger } = useLogger();
+  const logger = useLogger();
   try {
     const result = await collection.bulkWrite(records.map(r => ({ replaceOne: { replacement: toMongoDoc(r), filter: { _id: r.id as any }, upsert: true } })));
     if (!result.isOk()) throw new InternalError('Upsert failed - result is not as expected');

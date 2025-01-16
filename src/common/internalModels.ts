@@ -32,35 +32,11 @@ export interface MXDBSyncServerRecord<RecordType extends Record = Record> extend
   original: MXDBSyncRecordOriginal<RecordType>;
 }
 
-// export namespace MXDBSyncClientRecord {
-
-//   export function getSyncData<RecordType extends Record>(currentRecord: RecordType | undefined, syncRecord: MXDBSyncClientRecord<RecordType>): MXDBSyncRecordData<RecordType> | undefined {
-//     if (currentRecord == null) return;
-//     const lastSyncTimestamp = syncRecord.lastSyncTimestamp;
-//     const audits = Object.entries(syncRecord.audit ?? {}).filter(([timestamp]) => parseInt(timestamp) > lastSyncTimestamp);
-//     return {
-//       ...syncRecord,
-//       audit: audits.reduce((acc, [timestamp, audit]) => ({ ...acc, [timestamp]: audit }), {}),
-//       current: currentRecord,
-//     };
-//   }
-
-//   export function setSyncData<RecordType extends Record>(auditRecord: MXDBSyncRecordData<RecordType>): MXDBSyncRecord<RecordType> {
-//     return (({ current: ignored, lastSyncTimestamp, ...rest }: MXDBSyncRecordData<RecordType>) => rest)(auditRecord);
-//   }
-// }
-
 export interface MXDBSyncRequestRecord<RecordType extends Record> extends MXDBSyncClientRecord<RecordType> { }
 
 export interface MXDBSyncRequest<RecordType extends Record = any> {
   collectionName: string;
   records: MXDBSyncRequestRecord<RecordType>[];
-}
-
-export interface MXDBSyncResponse<RecordType extends Record = any> {
-  updated: RecordType[];
-  savedIds: string[];
-  removedIds: string[];
 }
 
 export interface SubscriptionRequest {

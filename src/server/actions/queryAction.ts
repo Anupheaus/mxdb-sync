@@ -1,20 +1,20 @@
 import { is } from '@anupheaus/common';
 import { mxdbQueryAction } from '../../common/internalActions';
-import { mxdbPushRecords, mxdbRefreshQuery } from '../../common/internalEvents';
+import { mxdbRefreshQuery } from '../../common/internalEvents';
 import { useCollection } from '../collections';
 import { useEvent } from '../events';
-import { useDb } from '../providers';
+import { useClient, useDb } from '../providers';
 import { createServerAction } from './createServerAction';
 
 export const serverQueryAction = createServerAction(mxdbQueryAction, async ({ collectionName, filters, pagination, sorts, queryId, registrationAction }) => {
   const { collection, query } = useCollection(collectionName);
   const { onWatch, removeWatch } = useDb();
-  const pushRecordsToClient = useEvent(mxdbPushRecords);
+  const { pushRecords } = useClient();
   const forceRefreshQuery = useEvent(mxdbRefreshQuery);
 
   const performQuery = async (): Promise<[string[], number]> => {
-    const { data: records, total } = await query({ filters, pagination, sorts });
-    await pushRecordsToClient({ collectionName, records });
+    const { data: records, total } = await query({ filters, pagination, sorts }, true);
+    await pushRecords(collection, records);
     return [records.ids(), total];
   };
 

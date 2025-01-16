@@ -1,7 +1,9 @@
-import Koa from 'koa';
-import { ApiError, Logger } from '@anupheaus/common';
+import type Koa from 'koa';
+import { ApiError } from '@anupheaus/common';
+import { useLogger } from './useLogger';
 
-export function createRequestLogger(logger: Logger): Koa.Middleware {
+export function createRequestLogger(): Koa.Middleware {
+  const logger = useLogger();
   return async (ctx, next) => {
     try {
       // logger.info('Request started', { method: ctx.method, path: ctx.path });

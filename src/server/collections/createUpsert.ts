@@ -7,7 +7,7 @@ import { configRegistry } from '../../common/registries';
 import type { MXDBSyncServerRecord } from '../../common/internalModels';
 
 async function writeSyncRecords<RecordType extends Record>(syncCollection: Collection<MongoDocOf<MXDBSyncServerRecord<RecordType>>>, records: RecordType[], existingRecords: RecordType[]) {
-  const { logger } = useLogger();
+  const logger = useLogger();
   try {
     const { getMatchingRecords, bulkWrite } = useDb();
     const { generateSyncRecordsFrom } = useAuditTools();

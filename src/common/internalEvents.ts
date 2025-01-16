@@ -6,7 +6,20 @@ export interface MXDBPushRecordsEventPayload {
   records: Record[];
 }
 
-export const mxdbPushRecords = defineEvent<MXDBPushRecordsEventPayload>('mxdb.pushRecords');
+export interface MXDBRemoveRecordsEventPayload {
+  collectionName: string;
+  ids: string[];
+}
+
+export interface MXDBServerPushEventPayload {
+  collectionName: string;
+  updatedRecords: Record[];
+  removedRecordIds: string[];
+}
+
+export const mxdbServerPush = defineEvent<MXDBServerPushEventPayload>('mxdbServerRecordsUpdate');
+// export const mxdbPushRecords = defineEvent<MXDBPushRecordsEventPayload>('mxdb.pushRecords');
+// export const mxdbRemoveRecords = defineEvent<MXDBRemoveRecordsEventPayload>('mxdb.removeRecords');
 
 export interface MXDBRefreshQueryEventPayload {
   queryId: string;

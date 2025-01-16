@@ -50,14 +50,23 @@ export function useSyncCollection<RecordType extends Record>(collection: MXDBSyn
     return result.remove(ids);
   };
 
-  const updateSavedFromServerSync = async (ids: string[], syncTime: number = generateSyncTime()): Promise<void> => {
+  const updateUpdatedFromServerSync = async (records: RecordType[], syncTime: number = generateSyncTime()): Promise<void> => {
     if (result == null) return;
-    const existingSyncRecords = await result.get(ids);
-    const syncRecords = existingSyncRecords.mapWithoutNull((existingSyncRecord): MXDBSyncClientRecord<RecordType> | undefined => {
-      if (isNewer(existingSyncRecord, syncTime)) return;
-      return { ...existingSyncRecord, lastSyncTimestamp: syncTime };
+
+    const existingSyncRecords = await result.get(records.ids());
+    const syncRecords: MXDBSyncClientRecord<RecordType>[] = [];
+    records.forEach(record => {
+      const existingSyncRecord = existingSyncRecords.findById(record.id);
+      if (!isNewer(existingSyncRecord, syncTime)) {
+        syncRecords.push(existingSyncRecord != null ? { ...existingSyncRecord, lastSyncTimestamp: syncTime } : { id: record.id, lastSyncTimestamp: syncTime, audit: {} });
+      }
     });
     await result.upsert(syncRecords);
+    return;
+  };
+
+  const upsertFromPush = async (records: RecordType[]): Promise<void> => {
+    await updateUpdatedFromServerSync(records);
   };
 
   return {
@@ -65,9 +74,9 @@ export function useSyncCollection<RecordType extends Record>(collection: MXDBSyn
       return result != null;
     },
     upsert,
-    // upsertFromQuery,
     getAllSyncRecords,
     removeSyncRecords,
-    updateSavedFromServerSync,
+    upsertFromPush,
+    updateUpdatedFromServerSync,
   };
 }

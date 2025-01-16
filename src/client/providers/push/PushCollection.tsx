@@ -1,21 +1,29 @@
 import { createComponent } from '@anupheaus/react-ui';
-import { mxdbPushRecords } from '../../../common';
+import { generateSyncTime, mxdbServerPush } from '../../../common';
 import { useEvent } from '../../hooks';
 import { useLogger } from '../../logger';
 import { useCurrentCollection } from '../collection';
 import { useDataCollection, useSyncCollection } from '../../useInternalCollections';
 
 export const PushCollection = createComponent('PushCollection', () => {
-  const onPushEvent = useEvent(mxdbPushRecords);
+  const onServerPush = useEvent(mxdbServerPush);
   const collection = useCurrentCollection();
-  const { upsert } = useDataCollection(collection);
-  const { upsert: syncUpsert } = useSyncCollection(collection);
+  const { remove: removeDataRecords, upsert: upsertDataRecords } = useDataCollection(collection);
+  const { removeSyncRecords, updateUpdatedFromServerSync } = useSyncCollection(collection);
   const logger = useLogger();
 
-  onPushEvent(async ({ collectionName, records }) => {
-    logger.debug('Pushing records to collection', { collectionName, records: records.ids() });
-    await upsert(records);
-    await syncUpsert(records);
+  onServerPush(async ({ collectionName, updatedRecords, removedRecordIds }) => {
+    if (collectionName !== collection.name) return;
+    logger.debug('Server update received', { collectionName, updatedRecords: updatedRecords.length, removedRecordIds: removedRecordIds.length });
+    const syncTime = generateSyncTime();
+    if (updatedRecords.length > 0) {
+      await upsertDataRecords(updatedRecords);
+      await updateUpdatedFromServerSync(updatedRecords, syncTime);
+    }
+    if (removedRecordIds.length > 0) {
+      await removeDataRecords(removedRecordIds);
+      await removeSyncRecords(removedRecordIds);
+    }
   });
 
   return null;

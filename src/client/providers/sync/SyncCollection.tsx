@@ -1,24 +1,25 @@
 import { createComponent } from '@anupheaus/react-ui';
 import { useSocket } from '../socket';
-import { generateSyncTime } from '../../../common';
-import { SyncEvents } from '../../../common/syncEvents';
+import { mxdbSyncCollectionAction } from '../../../common';
 import { useDataCollection, useSyncCollection } from '../../useInternalCollections';
 import { useLogger } from '../../logger';
 import { DateTime } from 'luxon';
 import { useContext, useRef } from 'react';
 import { useCurrentCollection } from '../collection';
 import { SyncUtilsContext } from './SyncContexts';
+import { useAction } from '../../hooks';
 
 export const SyncCollection = createComponent('SyncCollection', () => {
   const { onConnected } = useSocket();
+  const { mxdbSyncCollectionAction: syncCollection } = useAction(mxdbSyncCollectionAction);
   const collection = useCurrentCollection();
   const { onSyncing } = useContext(SyncUtilsContext);
   const logger = useLogger(collection.name);
-  const { upsert: upsertDataRecords, remove: removeDataRecords, clear: clearDataRecords, getCount } = useDataCollection(collection);
-  const { isSyncingEnabled, getAllSyncRecords, upsert: upsertSyncRecords, removeSyncRecords, updateSavedFromServerSync } = useSyncCollection(collection);
+  const { clear: clearDataRecords, getCount } = useDataCollection(collection);
+  const { isSyncingEnabled, getAllSyncRecords } = useSyncCollection(collection);
   const syncRequestIdRef = useRef('');
 
-  onConnected(async socket => {
+  onConnected(async () => {
     if (!isSyncingEnabled) return;
     const syncRequestId = syncRequestIdRef.current = Math.uniqueId();
 
@@ -53,24 +54,7 @@ export const SyncCollection = createComponent('SyncCollection', () => {
         return;
       }
 
-      const syncTime = generateSyncTime();
-      const { updated, savedIds, removedIds } = await SyncEvents.collection(collection).sync.emit(socket.emitWithAck.bind(socket), { records: syncRecords });
-      if (syncCancelled) return;
-
-      if (removedIds.length > 0) {
-        await removeDataRecords(removedIds);
-        await removeSyncRecords(removedIds);
-        if (syncCancelled) return;
-      }
-      if (updated.length > 0) {
-        await upsertDataRecords(updated);
-        await upsertSyncRecords(updated, syncTime);
-        if (syncCancelled) return;
-      }
-      if (savedIds.length > 0) {
-        await updateSavedFromServerSync(savedIds, syncTime);
-        if (syncCancelled) return;
-      }
+      await syncCollection({ records: syncRecords, collectionName: collection.name });
     } finally {
       if (!syncCancelled) {
         clearInterval(interval);

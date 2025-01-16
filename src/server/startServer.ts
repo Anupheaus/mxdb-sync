@@ -6,7 +6,8 @@ import { seedCollections } from './seedCollections';
 // import { setupHandlers } from './handlers';
 import type { MXDBServerAction } from './actions';
 import { internalActions, setupActions } from './actions';
-import { provideCollections } from './collections/provideCollections';
+import { setupCollectionWatches } from './setupCollectionWatches';
+import { useCollections } from './collections';
 
 export interface ServerConfig {
   collections: MXDBSyncedCollection[];
@@ -21,14 +22,17 @@ export interface ServerConfig {
 export async function startServer({ collections, server, actions, mongoDbName, mongoDbUrl, logger: providedLogger, clearDatabase = false }: ServerConfig) {
   setupLogger(providedLogger);
   const app = setupKoa(server);
-  setupSocket();
+  const provideCollections = useCollections(collections);
+  const onClientConnected = setupSocket();
   await setupDb(mongoDbName, mongoDbUrl, clearDatabase);
-  return provideCollections(collections, async () => {
-    await seedCollections(collections);
-    // setupHandlers(collections);
-    setupActions([...internalActions, ...(actions ?? [])]);
-    return {
-      app,
-    };
-  });
+  await (provideCollections(async () => {
+    await seedCollections();
+    onClientConnected(provideCollections(() => {
+      setupCollectionWatches();
+      setupActions([...internalActions, ...(actions ?? [])]);
+    }));
+  })());
+  return {
+    app,
+  };
 }

@@ -8,7 +8,7 @@ export function useEvent<T>(event: MXDBEvent<T>) {
   const { on } = useSocket();
   const handlerRef = useRef<(payload: T) => void>(() => void 0);
 
-  on<T>(event.name, payload => handlerRef.current(payload));
+  on<T>(`mxdb.events.${event.name}`, payload => handlerRef.current(payload));
 
   return (handler: (payload: T) => void) => { handlerRef.current = handler; };
 }

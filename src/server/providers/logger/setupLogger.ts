@@ -1,8 +1,9 @@
 import { Logger } from '@anupheaus/common';
-import type { LoggerContextProps } from './loggerContext';
-import { Context } from '../../contexts';
+
+let globalLogger = new Logger('MXDB_Sync');
 
 export function setupLogger(logger?: Logger): void {
-  if (logger == null) logger = new Logger('MXDB_Sync');
-  Context.set<LoggerContextProps>('logger', { logger });
+  if (logger != null) globalLogger = logger;
 }
+
+export const getGlobalLogger = () => globalLogger;

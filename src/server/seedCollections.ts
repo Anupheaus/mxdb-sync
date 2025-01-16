@@ -1,10 +1,10 @@
-import type { MXDBSyncedCollection } from '../common';
 import { configRegistry } from '../common/registries';
 import { useLogger } from './providers';
-import { useCollection } from './collections';
+import { useCollection, useCollections } from './collections';
 
-export async function seedCollections(collections: MXDBSyncedCollection[]) {
-  const { logger } = useLogger();
+export async function seedCollections() {
+  const logger = useLogger();
+  const { collections } = useCollections();
   logger.info('Seeding collections...');
   for (const collection of collections) {
     const config = configRegistry.get(collection);

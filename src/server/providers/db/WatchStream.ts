@@ -1,13 +1,14 @@
 import type { ChangeStreamDeleteDocument, ChangeStreamDocument, ChangeStreamInsertDocument, ChangeStreamUpdateDocument, Db, Document } from 'mongodb';
 import type { MongoDocOf, MXDBSyncedCollectionWatchUpdate } from '../../../common';
 import { WatchStreamGroupedEvents } from './WatchStreamGroupedUpdates';
-import type { Record } from '@anupheaus/common';
+import type { Logger, Record } from '@anupheaus/common';
 import { bind, is } from '@anupheaus/common';
 import { useDb } from './useDb';
 
 export class WatchStream {
-  constructor(db: Db) {
+  constructor(db: Db, logger: Logger) {
     this.#db = db;
+    this.#logger = logger;
     this.#watchCallbacks = new Map();
     this.#watchIdLookups = new Map();
     this.#groupedEvents = new Map();
@@ -15,6 +16,7 @@ export class WatchStream {
   }
 
   #db: Db;
+  #logger: Logger;
   #watchCallbacks: Map<string, Map<string, { collectionName: string, callback: (update: MXDBSyncedCollectionWatchUpdate) => void; }>>;
   #watchIdLookups: Map<string, string>;
   #groupedEvents: Map<string, WatchStreamGroupedEvents>;
@@ -61,7 +63,7 @@ export class WatchStream {
     if (allConfigs.length === 0) return;
     const update: MXDBSyncedCollectionWatchUpdate = {
       type: 'remove',
-      records: events.mapWithoutNull(event => event.fullDocumentBeforeChange?._id.toString()),
+      records: events.mapWithoutNull(event => event.documentKey?._id.toString()),
     };
     allConfigs.forEach(({ callback }) => callback(update));
   }
@@ -70,6 +72,7 @@ export class WatchStream {
     return (events: Document[]) => {
       if (events.length === 0) return;
       const eventType = events[0].operationType;
+      this.#logger.silly('Handling change stream events', { eventType, documentCount: events.length });
       switch (eventType) {
         case 'insert':
         case 'replace':
@@ -99,7 +102,7 @@ export class WatchStream {
     let eventId = this.#getEventIdFromChangeDocument(change);
     const collectionName = 'ns' in change && change.ns != null && 'coll' in change.ns ? change.ns.coll : undefined;
     if (!is.string(collectionName) || !is.string(eventId)) return;
-    eventId = `${collectionName}-${eventId}`; // make sure the event is scoped to each collection for which the changes are being made
+    eventId = `${collectionName}-${eventId}-${change.operationType}`; // make sure the event is scoped to each collection and each operation type for which the changes are being made
     const groupedEvents = this.#groupedEvents.getOrSet(eventId, () => new WatchStreamGroupedEvents({
       collectionName,
       eventId,
@@ -110,7 +113,7 @@ export class WatchStream {
   }
 
   #listenToChangeStream() {
-    const changeStream = this.#db.watch([{ $project: { documentKey: false } }]);
+    const changeStream = this.#db.watch([{ $project: { something: false } }]);
     changeStream.on('change', change => this.#handleEvent(change));
   }
 

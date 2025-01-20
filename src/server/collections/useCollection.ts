@@ -6,9 +6,11 @@ import { createGetRecordCount } from './createGetRecordCount';
 import { createGet } from './createGet';
 import { createQuery } from './createQuery';
 import { CollectionsStore } from './provideCollections';
+import { createRemove } from './createRemove';
 
 function useTypedCollection<RecordType extends Record>(collection: MXDBSyncedCollection<RecordType>) {
   const upsert = createUpsert(collection);
+  const remove = createRemove(collection);
   const clear = createClear(collection);
   const getRecordCount = createGetRecordCount(collection);
   const get = createGet(collection);
@@ -19,6 +21,7 @@ function useTypedCollection<RecordType extends Record>(collection: MXDBSyncedCol
     get,
     query,
     upsert,
+    remove,
     clear,
     getRecordCount,
   };

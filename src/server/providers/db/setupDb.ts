@@ -65,10 +65,9 @@ export async function setupDb(mongoDbName: string, mongoDbUrl: string, shouldCle
     logger.info('Connected to database successfully.');
     const db = client.db(mongoDbName);
     if (shouldClearDatabase) await clearDatabase(db);
-    const watchStream = new WatchStream(db);
+    const watchStream = new WatchStream(db, logger);
 
-    const registerWatchWithClient = (watchId: string) => {
-      const { getData } = useClient();
+    const registerWatchWithClient = (watchId: string, getData: ReturnType<typeof useClient>['getData']) => {
       const watches = getData<Set<string>>('watches', () => new Set());
       watches.add(watchId);
     };
@@ -86,8 +85,11 @@ export async function setupDb(mongoDbName: string, mongoDbUrl: string, shouldCle
     Context.set<DbContextProps>('db', {
       db,
       onWatch: (watchId, collection, callback) => {
-        const { provideClient } = useClient();
-        registerWatchWithClient(watchId);
+        const { client: socketClient, provideClient, getData } = useClient();
+        watchId = `${socketClient.id}-${collection.name}-${watchId}`; // add the client id and collection name to the watch id so that it is unique
+        const clientLogger = useLogger();
+        registerWatchWithClient(watchId, getData);
+        clientLogger.silly('Adding watch to database', { watchId, collectionName: collection.name });
         watchStream.addWatch(watchId, collection.name, provideClient(callback));
       },
       removeWatch: watchStream.removeWatch,

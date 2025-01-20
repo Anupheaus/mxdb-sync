@@ -1,18 +1,18 @@
-import type { MXDBSyncedCollection } from '../common';
 import { mxdbServerPush } from '../common';
 import { useCollections } from './collections';
 import { useEvent } from './events';
-import { useDb } from './providers';
+import { useDb, useLogger } from './providers';
 
 export function setupCollectionWatches() {
   const serverPush = useEvent(mxdbServerPush);
+  const logger = useLogger();
   const { onWatch } = useDb();
   const { collections } = useCollections();
-  const getWatchId = (collection: MXDBSyncedCollection) => `collection-watches-${collection.name}`;
 
-  collections.forEach(collection => onWatch(getWatchId(collection), collection, update => {
+  collections.forEach(collection => onWatch('collection-watch', collection, update => {
     const updatedRecords = update.type === 'upsert' ? update.records : [];
     const removedRecordIds = update.type === 'remove' ? update.records : [];
+    logger.debug('Database update received, pushing to client', { collectionName: collection.name, updatedRecords, removedRecordIds });
     serverPush({ collectionName: collection.name, updatedRecords, removedRecordIds });
   }));
 }

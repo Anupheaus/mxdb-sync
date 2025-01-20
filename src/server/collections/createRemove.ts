@@ -9,31 +9,30 @@ async function writeSyncRecords<RecordType extends Record>(syncCollection: Colle
   const logger = useLogger();
   try {
     const { getMatchingRecords, bulkWrite } = useDb();
-    const { generateSyncRecordsFrom } = useSyncTools();
+    const { generateDeletedSyncRecordsFrom } = useSyncTools();
     const existingSyncRecords = await getMatchingRecords(syncCollection, existingRecords);
-    const syncRecords = generateSyncRecordsFrom(existingSyncRecords, records, generateSyncTime(), 'TODO');
+    const syncRecords = generateDeletedSyncRecordsFrom(existingSyncRecords, records, generateSyncTime(), 'TODO');
     await bulkWrite(syncCollection, syncRecords);
   } catch (error) {
-    logger.error('Upsert sync records write error', { collection: syncCollection.collectionName, error });
+    logger.error('Upsert delete sync records write error', { collection: syncCollection.collectionName, error });
   }
 }
 
-export function createUpsert<RecordType extends Record>(collection: MXDBSyncedCollection<RecordType>) {
-  const { bulkWrite, getMatchingRecords, getCollections } = useDb();
+export function createRemove<RecordType extends Record>(collection: MXDBSyncedCollection<RecordType>) {
+  const { bulkDelete, getMatchingRecords, getCollections } = useDb();
   const config = configRegistry.getOrError(collection);
   const { dataCollection, syncCollection } = getCollections(collection);
 
-  async function upsert(record: RecordType): Promise<RecordType>;
-  async function upsert(records: RecordType[]): Promise<RecordType[]>;
-  async function upsert(records: RecordType | RecordType[]): Promise<RecordType | RecordType[]> {
-    if (!Array.isArray(records)) return (await upsert([records]))[0]; // make sure we call it with an array
+  async function remove(record: RecordType): Promise<void>;
+  async function remove(records: RecordType[]): Promise<void>;
+  async function remove(records: RecordType | RecordType[]): Promise<void> {
+    if (!Array.isArray(records)) return remove([records]); // make sure we call it with an array
     if (config.disableSync !== true) {
       const existingRecords = await getMatchingRecords(dataCollection, records);
       writeSyncRecords(syncCollection, records, existingRecords); // fire and don't wait        
     }
-    await bulkWrite(dataCollection, records);
-    return await getMatchingRecords(dataCollection, records);
+    await bulkDelete(dataCollection, records);
   }
 
-  return upsert;
+  return remove;
 }

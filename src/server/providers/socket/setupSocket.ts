@@ -48,10 +48,10 @@ export function setupSocket() {
       onClientConnected,
     });
 
-    return onClientConnected;
-
     logger.info('Websocket ready.');
+
+    return onClientConnected;
   } finally {
-    socket.close();
+    // socket.close();
   }
 }

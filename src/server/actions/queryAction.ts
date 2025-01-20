@@ -1,4 +1,4 @@
-import { is } from '@anupheaus/common';
+import { InternalError, is } from '@anupheaus/common';
 import { mxdbQueryAction } from '../../common/internalActions';
 import { mxdbRefreshQuery } from '../../common/internalEvents';
 import { useCollection } from '../collections';
@@ -6,8 +6,27 @@ import { useEvent } from '../events';
 import { useClient, useDb } from '../providers';
 import { createServerAction } from './createServerAction';
 
+type UseClientType = ReturnType<typeof useClient>;
+
+interface QueryData {
+  total: number;
+  recordIds: string[];
+}
+
+function useClientQueryData(queryId: string, recordIds: string[], total: number, isDataAvailable: UseClientType['isDataAvailable'], getData: UseClientType['getData']) {
+  if (!isDataAvailable()) throw new InternalError('Client data is not available when registering for query updates');
+  const allQueryData = getData('queryData', () => new Map<string, QueryData>());
+  const queryData = allQueryData.getOrSet(queryId, () => ({ total, recordIds }));
+  return {
+    get oldRecordIds() { return queryData.recordIds; },
+    get oldTotal() { return queryData.total; },
+    setQueryData(data: QueryData) { allQueryData.set(queryId, data); },
+  };
+}
+
 export const serverQueryAction = createServerAction(mxdbQueryAction, async ({ collectionName, filters, pagination, sorts, queryId, registrationAction }) => {
   const { collection, query } = useCollection(collectionName);
+  const { isDataAvailable, getData } = useClient();
   const { onWatch, removeWatch } = useDb();
   const { pushRecords } = useClient();
   const forceRefreshQuery = useEvent(mxdbRefreshQuery);
@@ -24,15 +43,14 @@ export const serverQueryAction = createServerAction(mxdbQueryAction, async ({ co
     const watchId = `mxdb.query.${queryId}`;
     switch (registrationAction) {
       case 'register':
-        onWatch(watchId, collection, async ({ type }) => {
-          // we don't need to worry about removals because the client will have already removed them as they are updated if they have that id already
-          // we don't need to worry about updates because the client will have already updated them as they are updated if they have that id already
-          if (type !== 'upsert') return;
+        onWatch(watchId, collection, async () => {
+          const { oldRecordIds, oldTotal, setQueryData } = useClientQueryData(queryId, recordIds, total, isDataAvailable, getData);
           const [newRecordIds, newTotal] = await performQuery();
+          setQueryData({ total: newTotal, recordIds: newRecordIds });
           // if the new total is different or we have different number of record ids, we need to update
-          if (newTotal !== total || newRecordIds.length !== recordIds.length) { return forceRefreshQuery({ queryId, total: newTotal }); }
+          if (newTotal !== oldTotal || newRecordIds.length !== oldRecordIds.length) { return forceRefreshQuery({ queryId, total: newTotal }); }
           // if the record is new or should now appear in this query or has changed place, we need to update
-          if (recordIds.some((id, index) => newRecordIds[index] !== id)) { return forceRefreshQuery({ queryId, total: newTotal }); }
+          if (oldRecordIds.some((id, index) => newRecordIds[index] !== id)) { return forceRefreshQuery({ queryId, total: newTotal }); }
         });
         break;
       case 'unregister':

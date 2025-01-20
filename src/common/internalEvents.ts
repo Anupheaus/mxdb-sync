@@ -26,4 +26,4 @@ export interface MXDBRefreshQueryEventPayload {
   total: number;
 }
 
-export const mxdbRefreshQuery = defineEvent<MXDBRefreshQueryEventPayload>('mxdb.refreshQuery');
+export const mxdbRefreshQuery = defineEvent<MXDBRefreshQueryEventPayload>('mxdbRefreshQuery');

@@ -20,7 +20,7 @@ export interface MXDBSyncRecordOriginal<RecordType extends Record> {
 }
 
 export interface MXDBSyncRecord<RecordType extends Record> extends Record {
-  original?: MXDBSyncRecordOriginal<RecordType>;
+  original: MXDBSyncRecordOriginal<RecordType>;
   audit: globalThis.Record<number, MXDBSyncRecordAudit>;
 }
 
@@ -29,7 +29,6 @@ export interface MXDBSyncClientRecord<RecordType extends Record = any> extends M
 }
 
 export interface MXDBSyncServerRecord<RecordType extends Record = Record> extends MXDBSyncRecord<RecordType> {
-  original: MXDBSyncRecordOriginal<RecordType>;
 }
 
 export interface MXDBSyncRequestRecord<RecordType extends Record> extends MXDBSyncClientRecord<RecordType> { }

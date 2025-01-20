@@ -46,4 +46,11 @@ export interface UpsertRequest {
 
 export type UpsertResponse = string[];
 
+export interface RemoveRequest {
+  collectionName: string;
+  recordIds: string[];
+}
+
+export type RemoveResponse = void;
+
 export { QueryProps, DistinctProps };

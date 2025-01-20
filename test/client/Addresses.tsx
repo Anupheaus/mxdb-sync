@@ -14,12 +14,14 @@ const columns: TableColumn<AddressRecord>[] = [
 ];
 
 export const Addresses = createComponent('Addresses', () => {
-  const { gridRequest, upsert } = useCollection(addresses);
+  const { gridRequest, upsert, remove } = useCollection(addresses);
   const { AddressDialog, openAddressDialog } = useAddressDialog();
 
   const onAdd = useBound(async () => { await openAddressDialog(undefined, upsert); });
 
   const onEdit = useBound(async (address: AddressRecord) => { await openAddressDialog(address, upsert); });
+
+  const onRemove = useBound(async (address: AddressRecord) => { await remove(address.id); });
 
   return (
     <Flex tagName="addresses" width={700} height={500}>
@@ -28,6 +30,7 @@ export const Addresses = createComponent('Addresses', () => {
         onRequest={gridRequest()}
         onEdit={onEdit}
         onAdd={onAdd}
+        onRemove={onRemove}
       />
       <AddressDialog />
     </Flex>

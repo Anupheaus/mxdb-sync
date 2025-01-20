@@ -63,11 +63,11 @@ async function bulkWrite<RecordType extends Record>(collection: Collection<Mongo
   const logger = useLogger();
   try {
     const result = await collection.bulkWrite(records.map(r => ({ replaceOne: { replacement: toMongoDoc(r), filter: { _id: r.id as any }, upsert: true } })));
-    if (!result.isOk()) throw new InternalError('Upsert failed - result is not as expected');
+    if (!result.isOk()) throw new InternalError('Bulk write failed - result is not as expected');
     const upsertedRecordCount = result.matchedCount + result.upsertedCount;
     const recordCount = records.length;
     if (upsertedRecordCount !== recordCount) {
-      logger.debug('Upsert failed', {
+      logger.debug('Bulk write failed', {
         collection: collection.collectionName, upsertedRecordCount, recordCount,
         matchedCount: result.matchedCount, modifiedCount: result.modifiedCount, upsertedCount: result.upsertedCount,
         insertedCount: result.insertedCount, deletedCount: result.deletedCount, upsertedIds: result.upsertedIds, insertedIds: result.insertedIds,
@@ -75,7 +75,25 @@ async function bulkWrite<RecordType extends Record>(collection: Collection<Mongo
       throw new InternalError(`Upsert failed - count of upserted records (${upsertedRecordCount}) does not match the count of records to upsert (${recordCount})`);
     }
   } catch (error) {
-    logger.error('Upsert error', { collection: collection.collectionName, error });
+    logger.error('Bulk write error', { collection: collection.collectionName, error });
+    throw error;
+  }
+}
+
+async function bulkDelete<RecordType extends Record>(collection: Collection<MongoDocOf<RecordType>>, records: RecordType[]): Promise<void> {
+  if (records.length === 0) return;
+  const logger = useLogger();
+  try {
+    const result = await collection.deleteMany({ _id: { $in: records.ids() } as any });
+    if (!result.acknowledged) throw new InternalError('Bulk delete failed - result is not as expected');
+    const deletedRecordCount = result.deletedCount;
+    const recordCount = records.length;
+    if (deletedRecordCount !== recordCount) {
+      logger.debug('Bulk delete failed', { collection: collection.collectionName, deletedRecordCount, recordCount });
+      throw new InternalError(`Delete failed - count of deleted records (${deletedRecordCount}) does not match the count of records to delete (${recordCount})`);
+    }
+  } catch (error) {
+    logger.error('Bulk delete error', { collection: collection.collectionName, error });
     throw error;
   }
 }
@@ -89,6 +107,7 @@ export function useDb() {
     getMatchingRecordsById,
     getMatchingRecords,
     bulkWrite,
+    bulkDelete,
     toMongoDoc,
     toMongoDocs,
     fromMongoDoc,

@@ -5,7 +5,7 @@ import { InternalError } from '@anupheaus/common';
 import type { Socket } from 'socket.io-client';
 
 export function useSocket() {
-  const { getSocket, onConnectionStateChange } = useContext(SocketContext);
+  const { getSocket, onConnectionStateChange, fakeDisconnect, fakeReconnect, on } = useContext(SocketContext);
   const isConnected = useBound(() => getSocket() != null);
 
   const emit = useBound(async <ReturnType = void, DataType = unknown>(event: string, data: DataType): Promise<ReturnType> => {
@@ -14,10 +14,15 @@ export function useSocket() {
     return socket.emitWithAck(event, data);
   });
 
-  const on = useBound(<DataType = unknown, ReturnType = unknown>(event: string, callback: (data: DataType) => ReturnType) => onConnectionStateChange((_ignore, socket) => {
-    if (socket == null) return;
-    socket.on(event, (data, response) => response(callback(data)));
-  }));
+  // const on = useBound(<DataType = unknown, ReturnType = unknown>(event: string, callback: (data: DataType) => ReturnType) => onConnectionStateChange((isNowConnected, socket) => {
+  //   if (!isNowConnected || socket == null) return;
+  //   console.log('registering on event', { event, isNowConnected });
+  //   socket.off(event);        
+  //   socket.on(event, (data, response) => {
+  //     console.log('on event called', { event, data });
+  //     return response(callback(data));
+  //   });
+  // }));
 
   const onConnected = (callback: (socket: Socket) => void, debugId?: string) => onConnectionStateChange((_result, socket) => {
     if (socket) callback(socket);
@@ -35,5 +40,7 @@ export function useSocket() {
     getSocket,
     emit,
     on,
+    fakeDisconnect,
+    fakeReconnect,
   };
 }

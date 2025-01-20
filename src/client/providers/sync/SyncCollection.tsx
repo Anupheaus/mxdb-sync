@@ -16,7 +16,7 @@ export const SyncCollection = createComponent('SyncCollection', () => {
   const { onSyncing } = useContext(SyncUtilsContext);
   const logger = useLogger(collection.name);
   const { clear: clearDataRecords, getCount } = useDataCollection(collection);
-  const { isSyncingEnabled, getAllSyncRecords } = useSyncCollection(collection);
+  const { isSyncingEnabled, getAllSyncRecords, markAsSynced, unmarkAsSynced } = useSyncCollection(collection);
   const syncRequestIdRef = useRef('');
 
   onConnected(async () => {
@@ -53,8 +53,13 @@ export const SyncCollection = createComponent('SyncCollection', () => {
         await clearDataRecords();
         return;
       }
-
-      await syncCollection({ records: syncRecords, collectionName: collection.name });
+      const syncData = await markAsSynced(syncRecords);
+      try {
+        await syncCollection({ records: syncRecords, collectionName: collection.name });
+      } catch (error) {
+        await unmarkAsSynced(syncData);
+        throw error;
+      }
     } finally {
       if (!syncCancelled) {
         clearInterval(interval);

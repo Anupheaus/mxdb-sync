@@ -1,11 +1,20 @@
-import type { Record } from '@anupheaus/common';
+import { is, type Record } from '@anupheaus/common';
 import { mxdbSyncCollectionAction } from '../../common/internalActions';
-import type { MXDBSyncServerRecord } from '../../common/internalModels';
+import type { MXDBSyncRequestRecord, MXDBSyncServerRecord } from '../../common/internalModels';
 import { useCollection } from '../collections';
-import { useAuditTools } from '../hooks';
 import { useClient, useDb, useLogger } from '../providers';
 import { createServerAction } from './createServerAction';
-import { isNewer } from '../../common';
+import { useSyncTools } from '../../common';
+
+function mergeSyncRecords<RecordType extends Record>(existingSyncRecord: MXDBSyncServerRecord<RecordType>, syncRecord: MXDBSyncRequestRecord<RecordType>): MXDBSyncServerRecord<RecordType> {
+  return {
+    ...existingSyncRecord,
+    audit: {
+      ...existingSyncRecord.audit,
+      ...syncRecord.audit,
+    },
+  };
+}
 
 export const serverSyncAction = createServerAction(mxdbSyncCollectionAction, async ({ collectionName, records }) => {
   const { collection } = useCollection(collectionName);
@@ -13,57 +22,63 @@ export const serverSyncAction = createServerAction(mxdbSyncCollectionAction, asy
   const rawLogger = useLogger();
   const logger = rawLogger.createSubLogger(collection.name).createSubLogger('Synchronise');
   const { getCollections, getMatchingRecords, bulkWrite } = useDb();
-  const { createRecordFromSyncRecord, mergeSyncRecords, isNewRecord } = useAuditTools();
+  const { createRecordFromSyncRecord } = useSyncTools();
   const { dataCollection, syncCollection } = getCollections(collection);
+  const matchingDataRecords = await getMatchingRecords(dataCollection, records);
   const matchingSyncRecords = await getMatchingRecords(syncCollection, records);
-  const updatedRecords: Record[] = [];
+  const dataRecordsToUpdate: Record[] = [];
+  const clientDataRecordsToUpdate: Record[] = [];
   const updatedSyncRecords: MXDBSyncServerRecord[] = [];
   const removedRecordIds: string[] = [];
   const addClientRecordIds: string[] = [];
   logger.debug('Synchronising records...', { records: records.length });
   if (records.length === 0) return;
-  records.forEach(record => {
+  records.forEach(syncRecord => {
+    addClientRecordIds.push(syncRecord.id);
     try {
-      const matchingSyncRecord = matchingSyncRecords.findById(record.id);
+      const matchingSyncRecord = matchingSyncRecords.findById(syncRecord.id);
+      const clientDataRecord = createRecordFromSyncRecord(syncRecord);
       if (matchingSyncRecord == null) {
-        if (isNewRecord(record)) {
-          const newRecord = createRecordFromSyncRecord(record);
-          updatedSyncRecords.push(record);
-          if (!newRecord) {
-            logger.silly(`New record "${record.id}" has been pushed from client, but last update was a deletion.  Recorded but now asking client to remove.`);
-            removedRecordIds.push(record.id);
-            return;
-          }
-          logger.silly(`Record "${record.id}" is a new record from the client.`);
-          updatedRecords.push(newRecord);
-          addClientRecordIds.push(newRecord.id);
-        } else {
-          logger.error('Record not found in sync collection and is not a new record from the client.', { record });
-          removedRecordIds.push(record.id);
-        }
-      } else {
-        const syncRecord = mergeSyncRecords(matchingSyncRecord.original, matchingSyncRecord, record);
         updatedSyncRecords.push(syncRecord);
-        const updatedRecord = createRecordFromSyncRecord(syncRecord);
-        if (!updatedRecord) {
-          logger.silly(`Record "${record.id}" has been deleted, updating client.`, { syncRecord });
-          removedRecordIds.push(record.id);
+        if (!clientDataRecord) {
+          logger.silly(`New record "${syncRecord.id}" has been pushed from client, but last update was a deletion.  Recorded but now asking client to remove.`);
+          removedRecordIds.push(syncRecord.id);
           return;
         }
-        addClientRecordIds.push(updatedRecord.id);
-        if (!isNewer(syncRecord, record.lastSyncTimestamp)) return;
-        updatedRecords.push(updatedRecord);
+        logger.silly(`Record "${syncRecord.id}" is a new record from the client.`);
+        dataRecordsToUpdate.push(clientDataRecord);
+      } else {
+        const matchingDataRecord = matchingDataRecords.findById(syncRecord.id);
+        const mergedSyncRecord = mergeSyncRecords(matchingSyncRecord, syncRecord);
+        if (!is.deepEqual(matchingSyncRecord, mergedSyncRecord)) updatedSyncRecords.push(mergedSyncRecord);
+        const newDataRecord = createRecordFromSyncRecord(mergedSyncRecord);
+        if (!newDataRecord) {
+          logger.silly(`Record "${syncRecord.id}" has been deleted, updating client.`, { syncRecord });
+          removedRecordIds.push(syncRecord.id);
+          return;
+        }
+        // if (syncRecord.id === 'f67089d8-f658-4db0-919d-e6235fe3ead6') {
+        //   console.log('check', {
+        //     clientDataRecord, matchingDataRecord, newDataRecord, matchingSyncRecord, syncRecord, mergedSyncRecord, isServerEqual: is.deepEqual(matchingDataRecord, newDataRecord),
+        //     isClientEqual: is.deepEqual(clientDataRecord, newDataRecord)
+        //   });
+        // }
+        if (!is.deepEqual(clientDataRecord, newDataRecord)) clientDataRecordsToUpdate.push(newDataRecord);
+        if (!is.deepEqual(matchingDataRecord, newDataRecord)) dataRecordsToUpdate.push(newDataRecord);
       }
     } catch (error) {
-      logger.error('Error synchronising record', { record, error });
+      logger.error('Error synchronising record', { syncRecord, error });
     }
   });
 
-  logger.debug('Bulk writing updated and new records...', { updatedRecords: updatedRecords.length });
-  await bulkWrite(dataCollection, updatedRecords);
-  logger.debug('Bulk writing synchronisation records...', { syncRecords: syncRecords.length });
+  // add the client ids to the collection so that any changes being stored are pushed out to the client
+  addExistingClientIds(collection, addClientRecordIds);
+  logger.debug('Bulk writing updated and new records...', { updatedRecords: dataRecordsToUpdate.length });
+  await bulkWrite(dataCollection, dataRecordsToUpdate);
+  logger.debug('Bulk writing synchronisation records...', { syncRecords: updatedSyncRecords.length });
   bulkWrite(syncCollection, updatedSyncRecords); // do not wait on these to complete
-  logger.debug('Pushing synchronisation results out to client', { updatedRecords: updatedRecords.length, removedRecords: removedRecordIds.length });
-  if (updatedRecords.length != addClientRecordIds.length) addExistingClientIds(collection, addClientRecordIds);
-  await syncRecords(collection, updatedRecords, removedRecordIds, true);
+  logger.debug('Pushing synchronisation results out to client', { updatedRecords: clientDataRecordsToUpdate.length, removedRecords: removedRecordIds.length });
+  // if updates have been made to the database, then we do not need to push them out here because the database change will push them out, unless no changes have been made and we have to remove some ids, then
+  // force a push out to the client
+  if (dataRecordsToUpdate.length === 0 || removedRecordIds.length > 0) await syncRecords(collection, clientDataRecordsToUpdate, removedRecordIds, true);
 });

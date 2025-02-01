@@ -1,7 +1,8 @@
 import { type DataRequest, type DataResponse, type Record } from '@anupheaus/common';
 import type { MongoDocOf, MXDBSyncedCollection } from '../../common';
-import { useDb, useLogger } from '../providers';
+import { useDb } from '../providers';
 import type { Filter } from 'mongodb';
+import { useLogger } from '@anupheaus/socket-api/server';
 
 export function createQuery<RecordType extends Record>(collection: MXDBSyncedCollection<RecordType>) {
   const { getCollections, fromMongoDocs, convertSort } = useDb();

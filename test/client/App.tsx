@@ -6,6 +6,7 @@ import { ConnectionTest } from './ConnectionTest';
 import { ClientId } from './ClientId';
 
 export const App = createComponent('App', () => {
+
   return (
     <Dialogs>
       <MXDBSync name="test" collections={collections}>

@@ -1,38 +1,33 @@
-import type { Logger } from '@anupheaus/common';
-import type { AnyHttpServer } from './internalModels';
-import { setupDb, setupSocket, setupLogger, setupKoa } from './providers';
+import { setupDb } from './providers';
 import type { MXDBSyncedCollection } from '../common';
 import { seedCollections } from './seedCollections';
-// import { setupHandlers } from './handlers';
-import type { MXDBServerAction } from './actions';
-import { internalActions, setupActions } from './actions';
+import { internalActions } from './actions';
 import { setupCollectionWatches } from './setupCollectionWatches';
 import { useCollections } from './collections';
+import { startServer as startSocketServer } from '@anupheaus/socket-api/server';
+import type { ServerConfig as StartSocketServerConfig } from '@anupheaus/socket-api/server';
 
-export interface ServerConfig {
+export interface ServerConfig extends StartSocketServerConfig {
   collections: MXDBSyncedCollection[];
-  actions?: MXDBServerAction[];
   mongoDbUrl: string;
   mongoDbName: string;
-  logger?: Logger;
-  server: AnyHttpServer;
   clearDatabase?: boolean;
 }
 
-export async function startServer({ collections, server, actions, mongoDbName, mongoDbUrl, logger: providedLogger, clearDatabase = false }: ServerConfig) {
-  setupLogger(providedLogger);
-  const app = setupKoa(server);
-  const provideCollections = useCollections(collections);
-  const onClientConnected = setupSocket();
-  await setupDb(mongoDbName, mongoDbUrl, clearDatabase);
-  await (provideCollections(async () => {
-    await seedCollections();
-    onClientConnected(provideCollections(() => {
+export async function startServer({ collections, mongoDbName, mongoDbUrl, clearDatabase = false, ...config }: ServerConfig) {
+  useCollections(collections);
+  const { onClientDisconnected } = await setupDb(mongoDbName, mongoDbUrl, clearDatabase);
+  await seedCollections();
+  return startSocketServer({
+    ...config,
+    actions: [...internalActions, ...(config.actions ?? [])],
+    onClientConnected: async client => {
       setupCollectionWatches();
-      setupActions([...internalActions, ...(actions ?? [])]);
-    }));
-  })());
-  return {
-    app,
-  };
+      await config.onClientConnected?.(client);
+    },
+    onClientDisconnected: async client => {
+      onClientDisconnected();
+      await config.onClientDisconnected?.(client);
+    },
+  });
 }

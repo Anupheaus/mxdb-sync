@@ -1,11 +1,10 @@
 import type { Logger } from '@anupheaus/common';
 import type { Db } from 'mongodb';
 import { MongoClient } from 'mongodb';
-import { useLogger } from '../logger';
 import { WatchStream } from './WatchStream';
 import { Context } from '../../contexts';
 import type { DbContextProps } from './DbContext';
-import { useClient, useSocket } from '../socket';
+import { useLogger, useSocketAPI } from '@anupheaus/socket-api/server';
 
 async function clearDatabase(db: Db) {
   const collections = await db.collections();
@@ -33,7 +32,6 @@ async function connectToDb(mongoDbName: string, mongoDbUrl: string, logger: Logg
 
 export async function setupDb(mongoDbName: string, mongoDbUrl: string, shouldClearDatabase: boolean) {
   const logger = useLogger();
-  const { onClientConnected } = useSocket();
   const client = new MongoClient(mongoDbUrl);
 
   client.on('error', error => {
@@ -67,35 +65,36 @@ export async function setupDb(mongoDbName: string, mongoDbUrl: string, shouldCle
     if (shouldClearDatabase) await clearDatabase(db);
     const watchStream = new WatchStream(db, logger);
 
-    const registerWatchWithClient = (watchId: string, getData: ReturnType<typeof useClient>['getData']) => {
-      const watches = getData<Set<string>>('watches', () => new Set());
-      watches.add(watchId);
-    };
-
-    onClientConnected(() => () => {
-      const { getData } = useClient();
+    const onClientDisconnected = () => {
+      const { getData } = useSocketAPI();
       const clientLogger = useLogger();
       const watches = getData<Set<string>>('watches');
       if (watches == null) return;
       clientLogger.debug('Removing client database watches...', { watchCount: watches.size });
       watches.forEach(watchId => watchStream.removeWatch(watchId));
       clientLogger.debug('Database watches closed successfully.', { remainingWatches: watchStream.count });
-    });
+    };
 
     Context.set<DbContextProps>('db', {
       db,
       onWatch: (watchId, collection, callback) => {
-        const { client: socketClient, provideClient, getData } = useClient();
+        const { client: socketClient, getData } = useSocketAPI();
         watchId = `${socketClient.id}-${collection.name}-${watchId}`; // add the client id and collection name to the watch id so that it is unique
         const clientLogger = useLogger();
-        registerWatchWithClient(watchId, getData);
+        const watches = getData<Set<string>>('watches', () => new Set());
+        watches.add(watchId);
         clientLogger.silly('Adding watch to database', { watchId, collectionName: collection.name });
-        watchStream.addWatch(watchId, collection.name, provideClient(callback));
+        watchStream.addWatch(watchId, collection.name, callback);
       },
       removeWatch: watchStream.removeWatch,
     });
+
+    return {
+      onClientDisconnected,
+    };
   } catch (error) {
     logger.error('An unexpected error has occurred with the database.', { error });
     await client.close();
+    throw error;
   }
 }

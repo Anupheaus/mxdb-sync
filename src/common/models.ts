@@ -3,11 +3,9 @@ import type { MXDBCollection, MXDBCollectionConfig, QueryProps, DistinctProps } 
 import type { DateTime } from 'luxon';
 import type { useCollection as useServerCollection } from '../server/collections';
 
-// export type MongoDocOf<RecordType extends Record> = Omit<RecordType, 'id'> & { _id: string; };
 export type MongoDocOf<RecordType extends Record> = {
   [K in keyof RecordType as K extends 'id' ? '_id' : K]: RecordType[K] extends DateTime<any> ? string : RecordType[K];
 };
-//Omit<RecordType, 'id'> & { _id: string; };
 
 export type QueryRequest<RecordType extends Record = Record> = Omit<QueryProps<RecordType>, 'disable'> & {
   collectionName: string;
@@ -52,5 +50,12 @@ export interface RemoveRequest {
 }
 
 export type RemoveResponse = void;
+
+export interface UnauthorisedOperationDetails {
+  userId: string | undefined;
+  token: string | undefined;
+  collectionName: string;
+  operation: 'upsert' | 'remove';
+}
 
 export { QueryProps, DistinctProps };

@@ -36,6 +36,15 @@
       ],
       "@anupheaus/mxdb": [
         "../mxdb/src",
+      ],
+      "@anupheaus/socket-api/server": [
+        "../socket-api/src/server",
+      ],
+      "@anupheaus/socket-api/client": [
+        "../socket-api/src/client",
+      ],
+      "@anupheaus/socket-api/common": [
+        "../socket-api/src/common",
       ]
     }
   },

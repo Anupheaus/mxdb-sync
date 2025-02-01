@@ -5,7 +5,7 @@ import type { QuerySubscriptionProps } from './QuerySubscription';
 import { QuerySubscription } from './QuerySubscription';
 import { useBound, useOnUnmount, useSubscription } from '@anupheaus/react-ui';
 import type { QueryProps } from '@anupheaus/mxdb';
-import { useSocket } from '../socket';
+import { useSocketAPI } from '@anupheaus/socket-api/client';
 
 export interface QuerySubscriptionQueryProps<RecordType extends Record> {
   props: QueryProps<RecordType>;
@@ -16,7 +16,7 @@ export interface QuerySubscriptionQueryProps<RecordType extends Record> {
 export function useQuerySubscription<RecordType extends Record>(collection: MXDBSyncedCollection<RecordType>) {
   const onUpdateRef = useRef<((total: number | undefined) => void)>(() => void 0);
   const { subscribe, unsubscribe } = useSubscription<QuerySubscriptionProps<RecordType>, number | undefined>(QuerySubscription, total => onUpdateRef.current(total));
-  const { isConnected } = useSocket();
+  const { getIsConnected } = useSocketAPI();
 
   useOnUnmount(() => unsubscribe());
 
@@ -26,7 +26,7 @@ export function useQuerySubscription<RecordType extends Record>(collection: MXDB
       unsubscribe();
       onUpdate(undefined);
     } else {
-      if (isConnected()) {
+      if (getIsConnected()) {
         const hash = Object.hash({ collectionName: collection.name, ...props });
         subscribe({ collectionName: collection.name, ...props }, hash);
       } else {

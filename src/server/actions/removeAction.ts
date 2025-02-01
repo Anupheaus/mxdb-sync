@@ -1,7 +1,6 @@
+import { createServerAction, useLogger } from '@anupheaus/socket-api/server';
 import { mxdbRemoveAction } from '../../common';
 import { useCollection } from '../collections';
-import { useLogger } from '../providers';
-import { createServerAction } from './createServerAction';
 
 export const serverRemoveAction = createServerAction(mxdbRemoveAction, async ({ collectionName, recordIds }) => {
   const logger = useLogger();

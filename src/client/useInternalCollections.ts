@@ -1,8 +1,9 @@
-import { createRecordFromSyncRecord, generateSyncRecordFromCurrentRecord, generateSyncTime, isNewer, type MXDBSyncedCollection } from '../common';
+import { getNowTime, useSyncTools, type MXDBSyncedCollection } from '../common';
 import { useCollection } from '@anupheaus/mxdb';
 import { is, type Record } from '@anupheaus/common';
 import { syncCollectionRegistry } from '../common/registries';
 import type { MXDBSyncClientRecord } from '../common/internalModels';
+import { useUser } from '@anupheaus/socket-api/client';
 
 export function useDataCollection<RecordType extends Record>(collection: MXDBSyncedCollection<RecordType>, dbName?: string) {
   return useCollection(collection, dbName);
@@ -11,11 +12,12 @@ export function useDataCollection<RecordType extends Record>(collection: MXDBSyn
 export function useSyncCollection<RecordType extends Record>(collection: MXDBSyncedCollection<RecordType>, dbName?: string) {
   const syncCollection = syncCollectionRegistry.getForClient(collection);
   const result = syncCollection != null ? useCollection(syncCollection, dbName) : undefined;
-
-  const userId = 'TODO'; // TODO: get the user id from the client
+  const { createSyncRecordFromRecord, createRecordFromSyncRecord, isNewer } = useSyncTools();
+  const { getUser } = useUser();
 
   async function upsert(records: RecordType[]): Promise<{ updatableRecords: RecordType[]; notUpdatableRecords: RecordType[]; }> {
-    if (result == null) return { updatableRecords: records, notUpdatableRecords: [] };
+    const userId = getUser()?.id;
+    if (result == null || userId == null) return { updatableRecords: records, notUpdatableRecords: [] };
 
     const existingSyncRecords = await result.get(records.ids());
     const cannotBeSyncedRecords: RecordType[] = [];
@@ -23,7 +25,7 @@ export function useSyncCollection<RecordType extends Record>(collection: MXDBSyn
     const syncRecords: MXDBSyncClientRecord<RecordType>[] = [];
     records.forEach(record => {
       const existingSyncRecord = existingSyncRecords.findById(record.id);
-      const syncRecord = generateSyncRecordFromCurrentRecord(record, existingSyncRecord, userId);
+      const syncRecord = createSyncRecordFromRecord(record, existingSyncRecord, userId);
       syncRecords.push(syncRecord);
       syncedRecords.push(record);
     });
@@ -37,8 +39,9 @@ export function useSyncCollection<RecordType extends Record>(collection: MXDBSyn
     return records;
   }
 
-  async function markRecordsAsRemoved(ids: string[], syncTime: number = generateSyncTime()): Promise<void> {
-    if (result == null) return;
+  async function markRecordsAsRemoved(ids: string[], syncTime: number = getNowTime()): Promise<void> {
+    const userId = getUser()?.id;
+    if (result == null || userId == null) return;
     const syncRecords = await result.get(ids);
     syncRecords.forEach(syncRecord => {
       syncRecord.audit[syncTime] = { operations: [{ op: 'delete', path: ['id'] }], userId };
@@ -52,12 +55,13 @@ export function useSyncCollection<RecordType extends Record>(collection: MXDBSyn
   }
 
   async function upsertFromPush(records: RecordType[]): Promise<RecordType[]> {
-    if (result == null) return records;
+    const userId = getUser()?.id;
+    if (result == null || userId == null) return records;
 
     const existingSyncRecords = await result.get(records.ids());
     const syncRecords: MXDBSyncClientRecord<RecordType>[] = [];
     const syncedRecordIds: string[] = [];
-    const syncTime = generateSyncTime(); //ensure all records are synced to the same time
+    const syncTime = getNowTime(); //ensure all records are synced to the same time
     records.forEach(record => {
       const existingSyncRecord = existingSyncRecords.findById(record.id);
       if (existingSyncRecord != null && isNewer(existingSyncRecord)) {
@@ -66,7 +70,7 @@ export function useSyncCollection<RecordType extends Record>(collection: MXDBSyn
         if (!is.deepEqual(currentRecord, record)) return; // if the record is not the same, don't create a new sync record because the local one is newer than the server one
       }
       // create a new sync record for the record
-      const syncRecord = generateSyncRecordFromCurrentRecord(record, undefined, userId, syncTime) as MXDBSyncClientRecord<RecordType>;
+      const syncRecord = createSyncRecordFromRecord(record, undefined, userId, syncTime) as MXDBSyncClientRecord<RecordType>;
       syncRecords.push(syncRecord);
       syncedRecordIds.push(syncRecord.id);
     });
@@ -75,9 +79,10 @@ export function useSyncCollection<RecordType extends Record>(collection: MXDBSyn
   }
 
   async function markAsSynced(records: RecordType[]): Promise<Map<string, number>> {
-    if (result == null) return new Map();
+    const userId = getUser()?.id;
+    if (result == null || userId == null) return new Map();
     const syncRecords = await result.get(records.ids());
-    const syncTime = generateSyncTime();
+    const syncTime = getNowTime();
     const lastSyncTimestamps = new Map<string, number>();
     records.map(record => {
       const syncRecord = syncRecords.findById(record.id);

@@ -1,13 +1,13 @@
+import { useEvent, useLogger } from '@anupheaus/socket-api/server';
 import { mxdbServerPush } from '../common';
 import { useCollections } from './collections';
-import { useEvent } from './events';
-import { useDb, useLogger } from './providers';
+import { useDb } from './providers';
 
 export function setupCollectionWatches() {
   const serverPush = useEvent(mxdbServerPush);
   const logger = useLogger();
   const { onWatch } = useDb();
-  const { collections } = useCollections();
+  const collections = useCollections();
 
   collections.forEach(collection => onWatch('collection-watch', collection, update => {
     const updatedRecords = update.type === 'upsert' ? update.records : [];

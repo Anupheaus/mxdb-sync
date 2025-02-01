@@ -5,8 +5,8 @@ import { Context } from '../../contexts';
 import type { DbContextProps } from './DbContext';
 import type { Collection, Db, Filter, Sort, WithId } from 'mongodb';
 import type { MongoDocOf, MXDBSyncedCollection } from '../../../common';
-import { useLogger } from '../logger';
 import type { MXDBSyncServerRecord } from '../../../common/internalModels';
+import { useLogger } from '@anupheaus/socket-api/server';
 
 function toMongoDoc<RecordType extends Record>(record: RecordType): MongoDocOf<RecordType> {
   return (({ id, ...rec }) => ({ ...rec, _id: record.id }))(record) as unknown as MongoDocOf<RecordType>;

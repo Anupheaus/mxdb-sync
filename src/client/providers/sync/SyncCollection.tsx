@@ -1,5 +1,4 @@
 import { createComponent } from '@anupheaus/react-ui';
-import { useSocket } from '../socket';
 import { mxdbSyncCollectionAction } from '../../../common';
 import { useDataCollection, useSyncCollection } from '../../useInternalCollections';
 import { useLogger } from '../../logger';
@@ -7,10 +6,10 @@ import { DateTime } from 'luxon';
 import { useContext, useRef } from 'react';
 import { useCurrentCollection } from '../collection';
 import { SyncUtilsContext } from './SyncContexts';
-import { useAction } from '../../hooks';
+import { useAction, useSocketAPI } from '@anupheaus/socket-api/client';
 
 export const SyncCollection = createComponent('SyncCollection', () => {
-  const { onConnected } = useSocket();
+  const { onConnected } = useSocketAPI();
   const { mxdbSyncCollectionAction: syncCollection } = useAction(mxdbSyncCollectionAction);
   const collection = useCurrentCollection();
   const { onSyncing } = useContext(SyncUtilsContext);

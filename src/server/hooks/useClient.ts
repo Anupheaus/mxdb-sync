@@ -1,40 +1,12 @@
-import { is, type AnyFunction, type Record } from '@anupheaus/common';
-import { ClientAsyncStore } from './provideClient';
-import { mxdbServerPush, type MXDBSyncedCollection } from '../../../common';
-import { useEvent } from '../../events';
+import { is, type Record } from '@anupheaus/common';
+import { useEvent, useSocketAPI } from '@anupheaus/socket-api/server';
+import { mxdbServerPush, type MXDBSyncedCollection } from '../../common';
 
 export function useClient() {
-  const store = ClientAsyncStore.getStore();
-
-  function getData<T>(key: string, defaultValue: () => T): T;
-  function getData<T>(key: string): T | undefined;
-  function getData<T>(key: string, defaultValue?: () => T): T | undefined {
-    const scopedStore = ClientAsyncStore.getStore();
-    if (scopedStore == null) throw new Error('UserData is not available at this location.');
-    if (!scopedStore.data.has(key)) {
-      if (defaultValue == null) return undefined;
-      scopedStore.data.set(key, defaultValue());
-    }
-    return scopedStore.data.get(key);
-  }
-
-  function setData<T>(key: string, value: T) {
-    const scopedStore = ClientAsyncStore.getStore();
-    if (scopedStore == null) throw new Error('UserData is not available at this location.');
-    scopedStore.data.set(key, value);
-  }
-
-  function provideClient<T extends AnyFunction>(handler: T) {
-    if (store == null) throw new Error('provideClient is not available in the current context, it must be called within a connected client context.');
-    return ((...args: Parameters<T>) => ClientAsyncStore.run(store, () => handler(...args))) as T;
-  }
-
-  function isDataAvailable() {
-    return ClientAsyncStore.getStore() != null;
-  }
+  const result = useSocketAPI();
 
   function getClientIds(collectionName: string): Set<string> {
-    const collectionClientIds = getData('clientIds', () => new Map<string, Set<string>>());
+    const collectionClientIds = result.getData('clientIds', () => new Map<string, Set<string>>());
     return collectionClientIds.getOrSet(collectionName, () => new Set<string>());
   }
 
@@ -70,19 +42,13 @@ export function useClient() {
     syncRecords(collection, [], ids);
   }
 
-  return {
-    get client() {
-      if (store == null) throw new Error('client is not available in the current context, it must be called within a connected client context.');
-      return store.client;
-    },
-    provideClient,
-    getData,
-    setData,
-    isDataAvailable,
+  const additions = {
     pushRecords,
     removeRecords,
     syncRecords,
     addExistingClientIds,
     removeClientIds,
   };
+
+  return Object.assign(result, additions);
 }

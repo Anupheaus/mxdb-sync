@@ -5,8 +5,8 @@ import { createClear } from './createClear';
 import { createGetRecordCount } from './createGetRecordCount';
 import { createGet } from './createGet';
 import { createQuery } from './createQuery';
-import { CollectionsStore } from './provideCollections';
 import { createRemove } from './createRemove';
+import { useCollections } from './useCollections';
 
 function useTypedCollection<RecordType extends Record>(collection: MXDBSyncedCollection<RecordType>) {
   const upsert = createUpsert(collection);
@@ -33,7 +33,7 @@ export function useCollection<RecordType extends Record>(collection: MXDBSyncedC
 export function useCollection<RecordType extends Record = Record>(collectionName: string): UseCollection<RecordType>;
 export function useCollection<RecordType extends Record>(collectionOrName: MXDBSyncedCollection<RecordType> | string): UseCollection<RecordType> {
   if (is.string(collectionOrName)) {
-    const collections = CollectionsStore.getStore();
+    const collections = useCollections();
     if (collections == null) throw new Error('Unable to use useCollection at this location, the collections are not available.');
     const collection = collections.find(({ name }) => name === collectionOrName);
     if (collection == null) throw new Error(`Unable to find collection "${collectionOrName}" in the collections.`);

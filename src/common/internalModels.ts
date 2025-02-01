@@ -48,5 +48,3 @@ export interface SubscriptionResponse<RecordType extends Record> {
   records: RecordType[];
   total: number;
 }
-
-export const MXDBEndpointSpec = Symbol('MXDBEndpointSpec');

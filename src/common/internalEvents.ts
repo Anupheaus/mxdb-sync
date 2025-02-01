@@ -18,8 +18,6 @@ export interface MXDBServerPushEventPayload {
 }
 
 export const mxdbServerPush = defineEvent<MXDBServerPushEventPayload>('mxdbServerRecordsUpdate');
-// export const mxdbPushRecords = defineEvent<MXDBPushRecordsEventPayload>('mxdb.pushRecords');
-// export const mxdbRemoveRecords = defineEvent<MXDBRemoveRecordsEventPayload>('mxdb.removeRecords');
 
 export interface MXDBRefreshQueryEventPayload {
   queryId: string;

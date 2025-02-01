@@ -1,2 +1,1 @@
-// export * from './useAuditTools';
-// export * from './useClientTools';
+export * from './useClient';

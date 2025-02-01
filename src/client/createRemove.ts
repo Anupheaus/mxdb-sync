@@ -3,7 +3,7 @@ import { useSync } from './providers';
 import type { Record } from '@anupheaus/common';
 import { is } from '@anupheaus/common';
 import { useDataCollection, useSyncCollection } from './useInternalCollections';
-import { useAction } from './hooks';
+import { useAction } from '@anupheaus/socket-api/client';
 
 export function createRemove<RecordType extends Record>(collection: MXDBSyncedCollection<RecordType>, dbName?: string) {
   const { remove: removeDataRecords } = useDataCollection(collection, dbName);

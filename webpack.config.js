@@ -43,6 +43,9 @@ const generateSettings = (name, isDev) => ({
       ...isDev ? {
         '@anupheaus/mxdb/common': path.join(__dirname, '../mxdb/src/defineCollection'),
         '@anupheaus/mxdb': path.join(__dirname, '../mxdb/src'),
+        '@anupheaus/socket-api/common': path.join(__dirname, '../socket-api/src/common'),
+        '@anupheaus/socket-api/server': path.join(__dirname, '../socket-api/src/server'),
+        '@anupheaus/socket-api/client': path.join(__dirname, '../socket-api/src/client'),
         '@anupheaus/common': path.join(__dirname, '../common/src'),
         '@anupheaus/react-ui': path.join(__dirname, '../react-ui/src'),
       } : {},

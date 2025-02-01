@@ -1,13 +1,14 @@
 import type { Logger, Record } from '@anupheaus/common';
 import type { MXDBSyncedCollection } from '../common';
-import { useQuerySubscription, useSocket, useSync } from './providers';
+import { useQuerySubscription, useSync } from './providers';
 import { useDataCollection } from './useInternalCollections';
 import type { QueryProps, QueryResponse } from '@anupheaus/mxdb';
 import { useRef } from 'react';
+import { useSocketAPI } from '@anupheaus/socket-api/client';
 
 export function createQuery<RecordType extends Record>(collection: MXDBSyncedCollection<RecordType>, dbName: string | undefined, logger: Logger) {
   const { finishSyncing } = useSync();
-  const { isConnected } = useSocket();
+  const { getIsConnected } = useSocketAPI();
   const { query: dataQuery } = useDataCollection(collection, dbName);
   const { query: remoteQuery } = useQuerySubscription(collection);
   const stateRef = useRef<QueryResponse<RecordType>>({ records: [], total: 0 });
@@ -15,7 +16,7 @@ export function createQuery<RecordType extends Record>(collection: MXDBSyncedCol
 
   const generateResult = () => (({ records, total }: QueryResponse<RecordType>) => ({
     records,
-    total: (isConnected() ? serverTotalRef.current : undefined) ?? total
+    total: (getIsConnected() ? serverTotalRef.current : undefined) ?? total
   }))(stateRef.current);
 
   function query(props: QueryProps<RecordType>, onResponse: (result: QueryResponse<RecordType>) => void): void;

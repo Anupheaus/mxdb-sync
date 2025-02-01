@@ -8,5 +8,10 @@ interface TestResponse {
   bar: string;
 }
 
-export const testEndpoint = defineAction<TestRequest, TestResponse>()('test');
+interface SignInRequest {
+  email: string;
+  password: string;
+}
 
+export const testAction = defineAction<TestRequest, TestResponse>()('test');
+export const signInAction = defineAction<SignInRequest, boolean>()('signIn');

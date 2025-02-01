@@ -2,8 +2,8 @@ import { createComponent, useBound, useMap, useSubscriptionProvider } from '@anu
 import { type ReactNode } from 'react';
 import type { QuerySubscriptionProps } from './QuerySubscription';
 import { QuerySubscription } from './QuerySubscription';
-import { useAction, useEvent } from '../../hooks';
 import { mxdbQueryAction, mxdbRefreshQuery } from '../../../common';
+import { useAction, useEvent } from '@anupheaus/socket-api/client';
 
 interface Props {
   children?: ReactNode;

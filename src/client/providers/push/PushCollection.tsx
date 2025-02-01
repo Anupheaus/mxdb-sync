@@ -1,9 +1,9 @@
 import { createComponent } from '@anupheaus/react-ui';
 import { mxdbServerPush } from '../../../common';
-import { useEvent } from '../../hooks';
 import { useLogger } from '../../logger';
 import { useCurrentCollection } from '../collection';
 import { useDataCollection, useSyncCollection } from '../../useInternalCollections';
+import { useEvent } from '@anupheaus/socket-api/client';
 
 export const PushCollection = createComponent('PushCollection', () => {
   const onServerPush = useEvent(mxdbServerPush);

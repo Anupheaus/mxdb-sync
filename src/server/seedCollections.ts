@@ -1,10 +1,10 @@
+import { useLogger } from '@anupheaus/socket-api/server';
 import { configRegistry } from '../common/registries';
-import { useLogger } from './providers';
 import { useCollection, useCollections } from './collections';
 
 export async function seedCollections() {
   const logger = useLogger();
-  const { collections } = useCollections();
+  const collections = useCollections();
   logger.info('Seeding collections...');
   for (const collection of collections) {
     const config = configRegistry.get(collection);

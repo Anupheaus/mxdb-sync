@@ -1,10 +1,10 @@
 import { createComponent } from '@anupheaus/react-ui';
-import type { MXDBSyncedCollection } from '../../../common';
+import type { MXDBCollection } from '../../../common';
 import type { ReactNode } from 'react';
 import { CollectionContext } from './CollectionContext';
 
 interface Props {
-  collection: MXDBSyncedCollection;
+  collection: MXDBCollection;
   children?: ReactNode;
 }
 

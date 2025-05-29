@@ -14,7 +14,7 @@ const columns: TableColumn<AddressRecord>[] = [
 ];
 
 export const Addresses = createComponent('Addresses', () => {
-  const { gridRequest, upsert, remove } = useCollection(addresses);
+  const { tableRequest, upsert, remove } = useCollection(addresses);
   const { AddressDialog, openAddressDialog } = useAddressDialog();
 
   const onAdd = useBound(async () => { await openAddressDialog(undefined, upsert); });
@@ -27,7 +27,7 @@ export const Addresses = createComponent('Addresses', () => {
     <Flex tagName="addresses" width={700} height={500}>
       <Table<AddressRecord>
         columns={columns}
-        onRequest={gridRequest()}
+        onRequest={tableRequest()}
         onEdit={onEdit}
         onAdd={onAdd}
         onRemove={onRemove}

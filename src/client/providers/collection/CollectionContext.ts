@@ -1,4 +1,4 @@
 import { createContext } from 'react';
-import type { MXDBSyncedCollection } from '../../../common';
+import type { MXDBCollection } from '../../../common';
 
-export const CollectionContext = createContext<MXDBSyncedCollection>(null as unknown as MXDBSyncedCollection);
+export const CollectionContext = createContext<MXDBCollection>(null as unknown as MXDBCollection);

@@ -1,5 +1,5 @@
 import type { Record } from '@anupheaus/common';
-import { defineEvent } from './defineEvent';
+import { defineEvent } from '@anupheaus/socket-api/common';
 
 export interface MXDBPushRecordsEventPayload {
   collectionName: string;

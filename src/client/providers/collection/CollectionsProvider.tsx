@@ -1,10 +1,10 @@
 import { createComponent } from '@anupheaus/react-ui';
 import { useMemo, type ReactNode } from 'react';
-import type { MXDBSyncedCollection } from '../../../common';
+import type { MXDBCollection } from '../../../common';
 import { CollectionProvider } from './CollectionProvider';
 
 interface Props {
-  collections: MXDBSyncedCollection[];
+  collections: MXDBCollection[];
   children?: ReactNode;
 }
 

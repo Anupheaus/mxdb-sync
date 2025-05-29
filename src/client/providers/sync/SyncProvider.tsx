@@ -1,9 +1,13 @@
-import { createComponent, useMap, useSyncState } from '@anupheaus/react-ui';
+import { createComponent, useCallbacks, useLogger } from '@anupheaus/react-ui';
 import type { ReactNode } from 'react';
-import { useMemo } from 'react';
-import type { SyncUtilsContextProps, SyncContextBusyProps } from './SyncContexts';
-import { SyncUtilsContext, SyncContextBusy } from './SyncContexts';
-import type { MXDBSyncedCollection } from '../../../common';
+import { useMemo, useRef } from 'react';
+import type { SyncContextBusyProps } from './SyncContexts';
+import { SyncContextBusy } from './SyncContexts';
+import { PromiseState, type DeferredPromise } from '@anupheaus/common';
+import { useAction, useSocketAPI } from '@anupheaus/socket-api/client';
+import { useDb } from '../dbs';
+import { synchroniseCollections } from './synchronise-collections';
+import { mxdbSyncCollectionsAction } from '../../../common';
 
 interface Props {
   children?: ReactNode;
@@ -12,27 +16,46 @@ interface Props {
 export const SyncProvider = createComponent('SyncProvider', ({
   children,
 }: Props) => {
-  const busyCollections = useMap();
-  const { state: isBusy, getState: getIsBusy, setState: setIsBusy } = useSyncState(() => false);
+  const syncPromiseRef = useRef<DeferredPromise<void>>(Promise.createDeferred());
+  const syncRequestIdRef = useRef<string>('');
+  const { db, collections } = useDb();
+  const { onConnected, getIsConnected } = useSocketAPI();
+  const logger = useLogger('SyncProvider');
+  const { register: onSyncChanged, invoke: invokeSyncChanged } = useCallbacks<(isSyncing: boolean) => void>();
+  const { mxdbSyncCollectionsAction: syncCollections } = useAction(mxdbSyncCollectionsAction);
 
-  const utilsContext = useMemo<SyncUtilsContextProps>(() => ({
-    isValid: true,
-    onSyncing: (collection: MXDBSyncedCollection, isSyncing: boolean) => {
-      busyCollections.set(collection.name, isSyncing);
-      setIsBusy(Array.from(busyCollections.values()).some(v => v === true));
-    },
-  }), []);
+  useMemo(() => {
+    if (!getIsConnected()) syncPromiseRef.current.resolve();
+  }, []);
+
+  onConnected(async () => {
+    const syncRequestId = syncRequestIdRef.current = Math.uniqueId();
+
+    logger.info(`[${syncRequestId}] Socket connected, synchronising collections...`);
+    const startTime = Date.now();
+    if (syncPromiseRef.current.state !== PromiseState.Pending) {
+      syncPromiseRef.current = Promise.createDeferred();
+      invokeSyncChanged(true);
+    }
+
+    if (syncRequestIdRef.current !== syncRequestId) return;
+    await synchroniseCollections(db, collections, syncCollections);
+
+    if (syncRequestIdRef.current !== syncRequestId) return;
+    logger.info(`[${syncRequestId}] Synchronisation complete.`, { timeTaken: Date.now() - startTime });
+    syncPromiseRef.current.resolve();
+    invokeSyncChanged(false);
+  });
 
   const isBusyContext = useMemo<SyncContextBusyProps>(() => ({
-    isSyncing: isBusy,
-    getIsSyncing: getIsBusy,
-  }), [isBusy]);
+    isValid: true,
+    getSyncPromise: () => syncPromiseRef.current,
+    onSyncChanged,
+  }), []);
 
   return (
-    <SyncUtilsContext.Provider value={utilsContext}>
-      <SyncContextBusy.Provider value={isBusyContext}>
-        {children}
-      </SyncContextBusy.Provider>
-    </SyncUtilsContext.Provider>
+    <SyncContextBusy.Provider value={isBusyContext}>
+      {children}
+    </SyncContextBusy.Provider>
   );
 });

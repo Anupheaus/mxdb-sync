@@ -1,12 +1,21 @@
-import { createServerAction, useLogger } from '@anupheaus/socket-api/server';
+import { createServerAction } from '@anupheaus/socket-api/server';
 import { mxdbRemoveAction } from '../../common';
-import { useCollection } from '../collections';
+import { useClient } from '../hooks';
+import { useDb } from '../providers';
+import { useLogger } from '@anupheaus/common';
 
-export const serverRemoveAction = createServerAction(mxdbRemoveAction, async ({ collectionName, recordIds }) => {
+export const serverRemoveAction = createServerAction(mxdbRemoveAction, async ({ collectionName, recordIds, locallyOnly }) => {
+  const db = useDb();
+  const dbCollection = db.use(collectionName);
   const logger = useLogger();
-  const { remove, get: getRecords } = useCollection(collectionName);
+  const { removeFromClientIds } = useClient();
 
-  logger.info(`Removing ${recordIds.length} records`, { collectionName, recordIds });
-  const records = await getRecords(recordIds);
-  await remove(records);
+
+  if (locallyOnly) {
+    logger.info(`Removing ${recordIds.length} records from client only`, { collectionName, recordIds });
+    removeFromClientIds(dbCollection.collection, recordIds);
+  } else {
+    logger.info(`Removing ${recordIds.length} records`, { collectionName, recordIds });
+    await dbCollection.delete(recordIds);
+  }
 });

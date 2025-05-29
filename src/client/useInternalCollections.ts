@@ -1,15 +1,15 @@
-import { getNowTime, useSyncTools, type MXDBSyncedCollection } from '../common';
+import { getNowTime, useSyncTools, type MXDBCollection } from '../common';
 import { useCollection } from '@anupheaus/mxdb';
-import { is, type Record } from '@anupheaus/common';
+import { InternalError, is, type Record } from '@anupheaus/common';
 import { syncCollectionRegistry } from '../common/registries';
 import type { MXDBSyncClientRecord } from '../common/internalModels';
 import { useUser } from '@anupheaus/socket-api/client';
 
-export function useDataCollection<RecordType extends Record>(collection: MXDBSyncedCollection<RecordType>, dbName?: string) {
+export function useDataCollection<RecordType extends Record>(collection: MXDBCollection<RecordType>, dbName?: string) {
   return useCollection(collection, dbName);
 }
 
-export function useSyncCollection<RecordType extends Record>(collection: MXDBSyncedCollection<RecordType>, dbName?: string) {
+export function useSyncCollection<RecordType extends Record>(collection: MXDBCollection<RecordType>, dbName?: string) {
   const syncCollection = syncCollectionRegistry.getForClient(collection);
   const result = syncCollection != null ? useCollection(syncCollection, dbName) : undefined;
   const { createSyncRecordFromRecord, createRecordFromSyncRecord, isNewer } = useSyncTools();
@@ -17,15 +17,16 @@ export function useSyncCollection<RecordType extends Record>(collection: MXDBSyn
 
   async function upsert(records: RecordType[]): Promise<{ updatableRecords: RecordType[]; notUpdatableRecords: RecordType[]; }> {
     const userId = getUser()?.id;
-    if (result == null || userId == null) return { updatableRecords: records, notUpdatableRecords: [] };
+    if (userId == null) throw new InternalError('Records could not be synchronised as there is no current user.');
+    if (result == null) return { updatableRecords: records, notUpdatableRecords: [] };
 
     const existingSyncRecords = await result.get(records.ids());
     const cannotBeSyncedRecords: RecordType[] = [];
     const syncedRecords: RecordType[] = [];
     const syncRecords: MXDBSyncClientRecord<RecordType>[] = [];
-    records.forEach(record => {
+    await records.forEachPromise(async record => {
       const existingSyncRecord = existingSyncRecords.findById(record.id);
-      const syncRecord = createSyncRecordFromRecord(record, existingSyncRecord, userId);
+      const syncRecord = await createSyncRecordFromRecord(record, existingSyncRecord, userId);
       syncRecords.push(syncRecord);
       syncedRecords.push(record);
     });
@@ -41,7 +42,8 @@ export function useSyncCollection<RecordType extends Record>(collection: MXDBSyn
 
   async function markRecordsAsRemoved(ids: string[], syncTime: number = getNowTime()): Promise<void> {
     const userId = getUser()?.id;
-    if (result == null || userId == null) return;
+    if (userId == null) throw new InternalError('Records could not be synchronised as there is no current user.');
+    if (result == null) return;
     const syncRecords = await result.get(ids);
     syncRecords.forEach(syncRecord => {
       syncRecord.audit[syncTime] = { operations: [{ op: 'delete', path: ['id'] }], userId };
@@ -56,21 +58,22 @@ export function useSyncCollection<RecordType extends Record>(collection: MXDBSyn
 
   async function upsertFromPush(records: RecordType[]): Promise<RecordType[]> {
     const userId = getUser()?.id;
-    if (result == null || userId == null) return records;
+    if (userId == null) throw new InternalError('Records could not be synchronised as there is no current user.');
+    if (result == null) return records;
 
     const existingSyncRecords = await result.get(records.ids());
     const syncRecords: MXDBSyncClientRecord<RecordType>[] = [];
     const syncedRecordIds: string[] = [];
     const syncTime = getNowTime(); //ensure all records are synced to the same time
-    records.forEach(record => {
+    await records.forEachPromise(async record => {
       const existingSyncRecord = existingSyncRecords.findById(record.id);
       if (existingSyncRecord != null && isNewer(existingSyncRecord)) {
-        const currentRecord = createRecordFromSyncRecord(existingSyncRecord);
+        const currentRecord = await createRecordFromSyncRecord(existingSyncRecord, () => result.upsert(existingSyncRecord));
         if (currentRecord == null) return; // if the record is deleted locally, don't create a new sync record
         if (!is.deepEqual(currentRecord, record)) return; // if the record is not the same, don't create a new sync record because the local one is newer than the server one
       }
       // create a new sync record for the record
-      const syncRecord = createSyncRecordFromRecord(record, undefined, userId, syncTime) as MXDBSyncClientRecord<RecordType>;
+      const syncRecord = await createSyncRecordFromRecord(record, undefined, userId, syncTime) as MXDBSyncClientRecord<RecordType>;
       syncRecords.push(syncRecord);
       syncedRecordIds.push(syncRecord.id);
     });
@@ -103,10 +106,30 @@ export function useSyncCollection<RecordType extends Record>(collection: MXDBSyn
     await result.upsert(syncRecords);
   }
 
+  async function get(id: string): Promise<MXDBSyncClientRecord<RecordType> | undefined>;
+  async function get(ids: string[]): Promise<MXDBSyncClientRecord<RecordType>[]>;
+  async function get(record: RecordType): Promise<MXDBSyncClientRecord<RecordType> | undefined>;
+  async function get(records: RecordType[]): Promise<MXDBSyncClientRecord<RecordType>[]>;
+  async function get(records: string | RecordType): Promise<MXDBSyncClientRecord<RecordType>[]>;
+  async function get(records: string[] | RecordType[]): Promise<MXDBSyncClientRecord<RecordType>[]>;
+  async function get(args: string | RecordType | string[] | RecordType[]): Promise<MXDBSyncClientRecord<RecordType> | MXDBSyncClientRecord<RecordType>[] | undefined> {
+    if (result == null) return undefined;
+    const isSingular = !is.array(args);
+    if (!is.array(args)) return get([args as any]);
+    const ids = args.mapWithoutNull(recordOrId => is.plainObject(recordOrId) ? recordOrId.id : recordOrId);
+    const records = await result.get(ids);
+    if (isSingular) return records[0] as any;
+    return records;
+  }
+
+
+
   return {
     get isSyncingEnabled() {
+
       return result != null;
     },
+    get,
     upsert,
     getAllSyncRecords,
     removeSyncRecords,

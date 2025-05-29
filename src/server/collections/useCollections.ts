@@ -1,19 +1,14 @@
-import type { MXDBSyncedCollection } from '../../common';
+// import { AsyncLocalStorage } from 'async_hooks';
+// import type { MXDBCollection } from '../../common';
 
-let globalCollections: MXDBSyncedCollection[] = [];
+// const collectionsProvider = new AsyncLocalStorage<MXDBCollection[]>();
 
-export function useProvidedCollections(collections: MXDBSyncedCollection[]) {
-  globalCollections = collections;
-}
+// export function provideCollections<R>(collections: MXDBCollection[], delegate: () => R): R {
+//   return collectionsProvider.run(collections, delegate);
+// }
 
-export function useContextCollections() {
-  return globalCollections;
-}
-
-export function useCollections(): ReturnType<typeof useContextCollections>;
-export function useCollections(collections: MXDBSyncedCollection[]): void;
-export function useCollections(...args: unknown[]): ReturnType<typeof useContextCollections> | ReturnType<typeof useProvidedCollections> {
-  if (args.length == 0) return useContextCollections();
-  if (args.length === 1 && args[0] instanceof Array) return useProvidedCollections(args[0] as MXDBSyncedCollection[]);
-  throw new Error('Invalid arguments for useCollections');
-}
+// export function useCollections(): MXDBCollection[] {
+//   const collections = collectionsProvider.getStore();
+//   if (collections == null) throw new Error('useCollections must be used within a provideCollections context');
+//   return collections;
+// }

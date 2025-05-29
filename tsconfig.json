@@ -31,12 +31,6 @@
       "@anupheaus/react-ui": [
         "../react-ui/src",
       ],
-      "@anupheaus/mxdb/common": [
-        "../mxdb/src/defineCollection",
-      ],
-      "@anupheaus/mxdb": [
-        "../mxdb/src",
-      ],
       "@anupheaus/socket-api/server": [
         "../socket-api/src/server",
       ],

@@ -40,10 +40,9 @@ export const addresses = defineCollection<AddressRecord>({
     const { upsert, getRecordCount } = useCollection(addresses);
     const recordCount = await getRecordCount();
     if (recordCount >= totalRequired) return;
-
     await upsert([
       officeAddress,
-      ...Array.ofSize(totalRequired - recordCount).map((): AddressRecord => ({
+      ...Array.ofSize(totalRequired - recordCount - 1).map((): AddressRecord => ({
         id: faker.string.uuid(),
         firstLine: faker.location.streetAddress(),
         secondLine: faker.location.secondaryAddress(),

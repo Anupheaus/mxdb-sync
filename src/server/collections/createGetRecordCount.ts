@@ -1,13 +1,7 @@
 
-import type { Record } from '@anupheaus/common';
-import { useDb } from '../providers';
-import type { MongoDocOf, MXDBSyncedCollection } from '../../common';
+// import type { Record } from '@anupheaus/common';
+// import type { ServerDbCollection } from '../providers';
 
-export function createGetRecordCount<RecordType extends Record>(collection: MXDBSyncedCollection<RecordType>) {
-  const { db } = useDb();
-  const dbCollection = db.collection<MongoDocOf<RecordType>>(collection.name);
-
-  return async () => {
-    return await dbCollection.countDocuments();
-  };
-}
+// export function createGetRecordCount<RecordType extends Record>(collection: ServerDbCollection<RecordType>) {
+//   return () => collection.count();
+// }

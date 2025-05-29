@@ -51,7 +51,6 @@
   "dependencies": {
     "@anupheaus/common": "file:../common",
     "@anupheaus/react-ui": "file:../react-ui",
-    "@anupheaus/mxdb": "file:../mxdb",
     "@anupheaus/socket-api": "file:../socket-api",
     "luxon": "^3.2.1",
     "react": "^18.2.0",
@@ -67,7 +66,8 @@
     "@faker-js/faker": "^8.4.1",
     "just-diff": "^6.0.2",
     "just-diff-apply": "^5.5.0",
-    "ts-toolbelt": "^9.6.0"
+    "ts-toolbelt": "^9.6.0",
+    "sift": "^17.1.3"
   },
   "devDependencies": {
     "@emotion/react": "^11.10.6",

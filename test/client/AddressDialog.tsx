@@ -1,14 +1,9 @@
 import { createDialog, Flex, Text, useBound, useFields, useUpdatableState } from '@anupheaus/react-ui';
 import { AddressRecord } from '../common';
 
-export const useAddressDialog = createDialog('AddressDialog', ({ Dialog, Content, Actions, Action, close }) => (address: AddressRecord | undefined, onSave: (address: AddressRecord) => Promise<void>) => {
+export const useAddressDialog = createDialog('AddressDialog', ({ Dialog, Content, Actions, Action, close }) => () => (address: AddressRecord | undefined, onSave: (address: AddressRecord) => Promise<void>) => {
   const [localAddress, setLocalAddress] = useUpdatableState<AddressRecord>(() => address ?? AddressRecord.create(), [address]);
-  const useField = useFields(localAddress, setLocalAddress);
-  const { firstLine, setFirstLine } = useField('firstLine');
-  const { secondLine, setSecondLine } = useField('secondLine');
-  const { city, setCity } = useField('city');
-  const { county, setCounty } = useField('county');
-  const { postcode, setPostcode } = useField('postcode');
+  const { Field } = useFields(localAddress, setLocalAddress);
 
   const cancel = useBound(() => { close('cancel'); });
   const save = useBound(async () => { await onSave(localAddress); close('save'); });
@@ -17,11 +12,11 @@ export const useAddressDialog = createDialog('AddressDialog', ({ Dialog, Content
     <Dialog title={address == null ? 'Add New Address' : 'Edit Address'}>
       <Content>
         <Flex isVertical gap={'fields'}>
-          <Text label="First Line" value={firstLine} onChange={setFirstLine} wide />
-          <Text label="Second Line" value={secondLine} onChange={setSecondLine} wide />
-          <Text label="City" value={city} onChange={setCity} wide />
-          <Text label="County" value={county} onChange={setCounty} wide />
-          <Text label="Postcode" value={postcode} onChange={setPostcode} wide />
+          <Field field="firstLine" component={Text} label="First Line" />
+          <Field field="secondLine" component={Text} label="Second Line" />
+          <Field field="city" component={Text} label="City" />
+          <Field field="county" component={Text} label="County" />
+          <Field field="postcode" component={Text} label="Postcode" />
         </Flex>
       </Content>
       <Actions>

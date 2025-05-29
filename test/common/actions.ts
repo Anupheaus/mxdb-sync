@@ -1,4 +1,4 @@
-import { defineAction } from '../../src/common';
+import { defineAction } from '@anupheaus/socket-api/common';
 
 interface TestRequest {
   foo: string;

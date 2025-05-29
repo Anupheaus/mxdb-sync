@@ -12,9 +12,20 @@ import { privateKey } from './private-key';
 
 const mongoDbName = process.env.MONGO_DB_NAME as string;
 const mongoDbUrl = process.env.MONGO_DB_URI as string;
+const newRelicApiKey = process.env.NEW_RELIC_LOGGING_API_KEY as string;
 const port = 3010;
 
-const logger = new Logger('mxdb-sync');
+const loggerService = Logger.services.useNewRelic(newRelicApiKey);
+
+Logger.registerListener({
+  sendInterval: {
+    seconds: 2,
+  },
+  maxEntries: 100,
+  onTrigger: loggerService,
+});
+
+const logger = new Logger('MXDB-Sync');
 
 async function start() {
   const server = http.createServer();
@@ -27,6 +38,7 @@ async function start() {
     mongoDbName,
     mongoDbUrl,
     privateKey,
+    clientLoggingService: () => loggerService,
   });
   configureStaticFiles(app);
   configureViews(app);

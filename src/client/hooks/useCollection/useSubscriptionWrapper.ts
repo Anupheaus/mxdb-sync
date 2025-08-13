@@ -45,13 +45,15 @@ export function useSubscriptionWrapper<RecordType extends Record, Request extend
   const lastRequestIdRef = useRef<string>();
   const lastResultHashRef = useRef<string>();
   const executeValidateAndUpdateRef = useRef(() => Promise.resolve());
+  const remoteQueryCalledRef = useRef(false);
 
   // listen to changes from the client collection and invoke again when it changes
   useLayoutEffect(() => collection.onChange(() => executeValidateAndUpdateRef.current()), []);
 
+  async function invoke(props: AddDebugTo<AddDisableTo<Request>>, onResponse: (result: Response) => void, onSameResponse: () => void): Promise<void>;
   async function invoke(props: AddDebugTo<AddDisableTo<Request>>, onResponse: (result: Response) => void): Promise<void>;
   async function invoke(props: AddDebugTo<AddDisableTo<Request>>): Promise<Response>;
-  async function invoke(props: AddDebugTo<AddDisableTo<Request>>, onResponse?: (result: Response) => void): Promise<void | Response> {
+  async function invoke(props: AddDebugTo<AddDisableTo<Request>>, onResponse?: (result: Response) => void, onSameResponse?: () => void): Promise<void | Response> {
     await finishSyncing();
     const { disable, debug, ...rest } = props;
     const request = rest as Request;
@@ -89,7 +91,10 @@ export function useSubscriptionWrapper<RecordType extends Record, Request extend
     const executeValidateAndUpdate = executeValidateAndUpdateRef.current = async () => {
       if (!okToExecute()) return;
       const result = await execute();
-      if (result === RequestCancelled) return;
+      if (result === RequestCancelled) {
+        if (debug) console.log('[MXDB-Sync] Request cancelled, so not validating and updating', { disable, request }); // eslint-disable-line no-console
+        return;
+      }
       validateAndUpdate(result);
     };
 
@@ -97,13 +102,18 @@ export function useSubscriptionWrapper<RecordType extends Record, Request extend
     const validateAndUpdate = (response: Response) => {
       if (!okToExecute()) return;
       const resultHash = Object.hash(response);
-      if (lastResultHashRef.current === resultHash) return;
+      if (lastResultHashRef.current === resultHash) {
+        if (debug) console.log('[MXDB-Sync] Result has not changed, so calling onSameResponse', { disable, request }); // eslint-disable-line no-console
+        onSameResponse?.();
+        return;
+      }
+      if (debug) console.log('[MXDB-Sync] Result has changed, so calling onResponse', { disable, request }); // eslint-disable-line no-console
       lastResultHashRef.current = resultHash;
       onResponse?.(response);
     };
 
     if (debug) console.log('[MXDB-Sync] Invoking remote query', { disable, isActionRequired, request }); // eslint-disable-line no-console
-    const remoteQueryCalled = await remoteInvoke({
+    remoteQueryCalledRef.current = await remoteInvoke({
       request: (onRequestTransform?.(request) ?? request) as RemoteRequest,
       disable: disable || isActionRequired,
       debug,
@@ -112,6 +122,7 @@ export function useSubscriptionWrapper<RecordType extends Record, Request extend
         if (debug) console.log('[MXDB-Sync] Received remote query response', { disable, isActionRequired, request, response }); // eslint-disable-line no-console
         await onRemoteResponse?.(response);
         await executeValidateAndUpdate();
+        remoteQueryCalledRef.current = false;
       },
     });
 
@@ -123,9 +134,9 @@ export function useSubscriptionWrapper<RecordType extends Record, Request extend
     }
 
     let result = await execute();
-    if (debug) console.log('[MXDB-Sync] Finished calling local execute', { disable, isActionRequired, request, result, remoteQueryCalled }); // eslint-disable-line no-console
+    if (debug) console.log('[MXDB-Sync] Finished calling local execute', { disable, isActionRequired, request, result, remoteQueryCalled: remoteQueryCalledRef.current }); // eslint-disable-line no-console
     if (result === RequestCancelled) result = onDefaultResponse();
-    if (!remoteQueryCalled) {
+    if (!remoteQueryCalledRef.current) {
       if (debug) console.log('[MXDB-Sync] Validating and updating result after local execution', { disable, isActionRequired, request, result }); // eslint-disable-line no-console
       validateAndUpdate(result);
     }

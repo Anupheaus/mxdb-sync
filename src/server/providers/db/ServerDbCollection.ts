@@ -16,6 +16,14 @@ interface DbCollectionSyncProps<RecordType extends Record> {
   removedIds: string[];
 }
 
+interface UpsertProps {
+  resetAudit?: boolean;
+}
+
+interface DeleteProps {
+  clearAudit?: boolean;
+}
+
 interface Props<RecordType extends Record> {
   getDb(): Promise<Db>;
   collection: MXDBCollection<RecordType>;
@@ -76,9 +84,14 @@ export class ServerDbCollection<RecordType extends Record = Record> {
   @bind
   public async query(request?: QueryProps<RecordType>): Promise<DataResponse<RecordType>> {
     const collection = await this.#getCollection();
+    request = this.#formatRequest(request);
     if (request == null) {
-      const innerDocs = (await collection.find().toArray()).mapWithoutNull(dbUtils.deserialize);
-      return { data: innerDocs, total: innerDocs.length };
+      const startTime = performance.now();
+      const rawDocs = await collection.find().sort({ $natural: 1 }).toArray();
+      const endTime = performance.now();
+      if (endTime - startTime >= slowQueryThreshold) this.#logger.warn(`Slow query found for full request of "${collection.collectionName}"`, { duration: endTime - startTime });
+      const data = rawDocs.mapWithoutNull(dbUtils.deserialize);
+      return { data, total: data.length };
     } else {
       let filters: Filter<MongoDocOf<RecordType>> | undefined;
       let offset: number | undefined;
@@ -97,13 +110,13 @@ export class ServerDbCollection<RecordType extends Record = Record> {
       const sort = this.#parseSorts(request.sorts);
       this.#logger.debug('Querying database', { filters, sort, offset, limit });
       const startTime = performance.now();
-      const rawDocs = await collection.find(filters ?? {}, { sort, skip: offset, limit }).toArray();
+      const rawDocs = await collection.find(filters ?? {}, { sort, skip: offset, limit }).sort({ $natural: 1 }).toArray();
       const endTime = performance.now();
       if (endTime - startTime >= slowQueryThreshold) this.#logger.warn(`Slow query found for "${collection.collectionName}"`, { request, duration: endTime - startTime });
       const data = rawDocs.mapWithoutNull(dbUtils.deserialize);
-      if (request.getAccurateTotal !== true) return { data, total: data.length, offset, limit };
-      const totalCount = await collection.countDocuments(filters);
-      return { data, total: totalCount, offset, limit };
+      let total = data.length;
+      if (request.getAccurateTotal === true) total = await collection.countDocuments(filters);
+      return { data, total, offset, limit };
     }
   }
 
@@ -113,26 +126,26 @@ export class ServerDbCollection<RecordType extends Record = Record> {
     return (await collection.find().toArray()).mapWithoutNull(dbUtils.deserialize);
   }
 
-  public async upsert(record: RecordType): Promise<void>;
-  public async upsert(records: RecordType[]): Promise<void>;
+  public async upsert(record: RecordType, props?: UpsertProps): Promise<void>;
+  public async upsert(records: RecordType[], props?: UpsertProps): Promise<void>;
   @bind
-  public async upsert(records: RecordType | RecordType[]): Promise<void> {
+  public async upsert(records: RecordType | RecordType[], { resetAudit = false, }: UpsertProps = {}): Promise<void> {
     const collection = await this.#getCollection();
     records = Array.isArray(records) ? records : [records];
     if (records.length === 0) return;
+    const existingRecords = await this.get(records.ids());
     const result = await collection.bulkWrite(records.map(record => ({ replaceOne: { replacement: dbUtils.serialize(record), filter: { _id: record.id as any }, upsert: true } })));
     if (!result.isOk()) throw new InternalError('Bulk write failed - result is not as expected');
     const upsertedRecordCount = result.matchedCount + result.upsertedCount;
     const recordCount = records.length;
     if (upsertedRecordCount !== recordCount) throw new InternalError(`Upsert failed - count of upserted records (${upsertedRecordCount}) does not match the count of records to upsert (${recordCount})`);
-    const existingRecords = await this.get(records.ids());
-    if (this.#config.disableAudit !== true) this.#upsertAudit(existingRecords, records); // do not wait on the audit update
+    if (this.#config.disableAudit !== true) this.#upsertAudit(existingRecords, records, { resetAudit }); // do not wait on the audit update
   }
 
-  public async delete(id: string): Promise<void>;
-  public async delete(ids: string[]): Promise<void>;
+  public async delete(id: string, props?: DeleteProps): Promise<void>;
+  public async delete(ids: string[], props?: DeleteProps): Promise<void>;
   @bind
-  public async delete(ids: string | string[]): Promise<void> {
+  public async delete(ids: string | string[], { clearAudit = false }: DeleteProps = {}): Promise<void> {
     const collection = await this.#getCollection();
     ids = Array.isArray(ids) ? ids : [ids];
     const result = await collection.deleteMany({ _id: { $in: ids as any[] } });
@@ -141,7 +154,7 @@ export class ServerDbCollection<RecordType extends Record = Record> {
     const recordCount = ids.length;
     if (deletedRecordCount !== recordCount)
       throw new InternalError(`Delete failed in "${this.#collection.name}" - count of deleted records (${deletedRecordCount}) does not match the count of records to delete (${recordCount})`);
-    if (this.#config.disableAudit !== true) this.#deleteAudit(ids);
+    if (this.#config.disableAudit !== true) this.#deleteAudit(ids, { clearAudit });
   }
 
   @bind
@@ -226,34 +239,39 @@ export class ServerDbCollection<RecordType extends Record = Record> {
     return this.#getCollectionByName<AuditOf<RecordType>>(`${this.#collection.name}_sync`);
   }
 
-  async #upsertAudit(existingRecords: RecordType[], records: RecordType[]) {
+  async #upsertAudit(existingRecords: RecordType[], records: RecordType[], { resetAudit = false }: UpsertProps = {}) {
     const { getUser } = useSocketAPI();
     const user = getUser();
     const userId = user?.id ?? Math.emptyId();
     const recordIds = records.ids();
     const existingAuditRecords = await this.#getAuditRecords(recordIds);
     const newAuditRecords = records.mapWithoutNull(record => {
+      if (resetAudit) return auditor.createAuditFrom(record, userId);
+
       let existingAuditRecord = existingAuditRecords.findById(record.id);
       const existingRecord = existingRecords.findById(record.id);
-      if (existingRecord != null) {
+      if (existingRecord != null && existingAuditRecord != null) {
         if (is.deepEqual(existingRecord, record)) return;
-        if (existingAuditRecord != null) {
-          const existingRecordFromAudit = auditor.createRecordFrom(existingAuditRecord);
-          if (!is.deepEqual(existingRecordFromAudit, existingRecord)) existingAuditRecord = auditor.updateAuditWith(existingRecord, existingAuditRecord, Math.emptyId());
-        }
+        const existingRecordFromAudit = auditor.createRecordFrom(existingAuditRecord);
+        if (!is.deepEqual(existingRecordFromAudit, existingRecord)) existingAuditRecord = auditor.updateAuditWith(existingRecord, existingAuditRecord, Math.emptyId());
       }
       return existingAuditRecord == null ? auditor.createAuditFrom(record, userId) : auditor.updateAuditWith(record, existingAuditRecord, userId);
     });
     await this.#writeAuditRecords(newAuditRecords);
   }
 
-  async #deleteAudit(ids: string[]) {
+  async #deleteAudit(ids: string[], { clearAudit = false }: DeleteProps = {}) {
     const { getUser } = useSocketAPI();
     const user = getUser();
     const userId = user?.id ?? Math.emptyId();
     const existingAuditRecords = await this.#getAuditRecords(ids);
-    const newAuditRecords = existingAuditRecords.map(auditRecord => auditor.delete(auditRecord, userId));
-    await this.#writeAuditRecords(newAuditRecords);
+    if (clearAudit) {
+      const collection = await this.#getAuditCollection();
+      await collection.deleteMany({ _id: { $in: ids } });
+    } else {
+      const newAuditRecords = existingAuditRecords.map(auditRecord => auditor.delete(auditRecord, userId));
+      await this.#writeAuditRecords(newAuditRecords);
+    }
   }
 
   async #clearAudit() {
@@ -294,8 +312,8 @@ export class ServerDbCollection<RecordType extends Record = Record> {
   async #configureIndexes(collection: Collection<MongoDocOf<RecordType>>) {
     const existingIndexes = await collection.indexes();
     const indexes = this.#config.indexes;
-    await existingIndexes.forEachPromise(this.#dropIndexIfNotRequired(collection, indexes));
-    await indexes.forEachPromise(this.#setupIndexOn(collection, existingIndexes));
+    await existingIndexes.forEachAsync(this.#dropIndexIfNotRequired(collection, indexes));
+    await indexes.forEachAsync(this.#setupIndexOn(collection, existingIndexes));
   }
 
   async #configure() {
@@ -323,7 +341,20 @@ export class ServerDbCollection<RecordType extends Record = Record> {
   async #writeAuditRecords(records: AuditOf<RecordType>[]) {
     if (records.length === 0) return;
     const collection = await this.#getAuditCollection();
-    await collection.bulkWrite(records.map(record => ({ replaceOne: { replacement: dbUtils.serialize(record), filter: { _id: record.id as any }, upsert: true } })));
+    try {
+      await collection.bulkWrite(records.map(record => ({ replaceOne: { replacement: dbUtils.serialize(record), filter: { _id: record.id as any }, upsert: true } })));
+    } catch (error) {
+      throw new InternalError({ error, message: `Failed to write audit records into the "${this.#collection.name}" collection.` });
+    }
+  }
+
+  #formatRequest(request?: QueryProps<RecordType>): QueryProps<RecordType> | undefined {
+    if (request == null) return;
+    if (request.pagination != null && Object.keys(request.pagination).length > 0) return request;
+    if (request.sorts != null && Object.keys(request.sorts).length > 0) return request;
+    if (request.filters != null && Object.keys(request.filters).length > 0) return request;
+    if (request.getAccurateTotal === true) return request;
+    return;
   }
 
 }

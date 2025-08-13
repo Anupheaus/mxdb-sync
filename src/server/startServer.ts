@@ -27,12 +27,14 @@ export async function startServer({ logger, collections, mongoDbName, mongoDbUrl
     logger,
     actions: [...internalActions, ...(config.actions ?? [])],
     subscriptions: [...internalSubscriptions, ...(config.subscriptions ?? [])],
-    contextWrapper: (delegate: () => void) => db.wrap(delegate)(),
+    contextWrapper: delegate => db.wrap(delegate)(),
     async onStartup() {
       const { impersonateUser } = useSocketAPI();
 
       await impersonateUser(adminUser, async () => {
+        const startTime = Date.now();
         await seedCollections(collections);
+        console.log(`Seeding took ${Date.now() - startTime}ms`); // eslint-disable-line no-console
         await config.onStartup?.();
       });
     },

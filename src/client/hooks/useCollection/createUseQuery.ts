@@ -23,7 +23,7 @@ export function createUseQuery<RecordType extends Record>(query: Query<RecordTyp
           if (props.debug) console.log('[MXDB-Sync] Received query response', { requestId, records, total }); // eslint-disable-line no-console
           if (requestId !== requestIdRef.current) return;
           setState({ records, total, isLoading: false });
-        });
+        }, () => setState(s => ({ ...s, isLoading: false })));
       }
     }, [Object.hash(props)]);
 

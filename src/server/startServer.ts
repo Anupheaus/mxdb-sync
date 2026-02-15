@@ -1,6 +1,6 @@
 import { provideDb } from './providers';
 import type { MXDBCollection } from '../common';
-import { seedCollections } from './seedCollections';
+import { seedCollections } from './seeding';
 import { internalActions } from './actions';
 import { startServer as startSocketServer, useSocketAPI } from '@anupheaus/socket-api/server';
 import type { SocketAPIUser, ServerConfig as StartSocketServerConfig } from '@anupheaus/socket-api/server';
@@ -13,13 +13,14 @@ export interface ServerConfig extends StartSocketServerConfig {
   mongoDbUrl: string;
   mongoDbName: string;
   clearDatabase?: boolean;
+  shouldSeedCollections?: boolean;
 }
 
 const adminUser: SocketAPIUser = {
   id: Math.emptyId(),
 };
 
-export async function startServer({ logger, collections, mongoDbName, mongoDbUrl, ...config }: ServerConfig) {
+export async function startServer({ logger, collections, mongoDbName, mongoDbUrl, shouldSeedCollections, ...config }: ServerConfig) {
   if (!logger) logger = Logger.getCurrent();
   if (!logger) logger = new Logger('MXDB-Sync');
   return logger.provide(() => provideDb(mongoDbName, mongoDbUrl, collections, db => startSocketServer({
@@ -33,7 +34,7 @@ export async function startServer({ logger, collections, mongoDbName, mongoDbUrl
 
       await impersonateUser(adminUser, async () => {
         const startTime = Date.now();
-        await seedCollections(collections);
+        if (shouldSeedCollections === true) await seedCollections(collections);
         console.log(`Seeding took ${Date.now() - startTime}ms`); // eslint-disable-line no-console
         await config.onStartup?.();
       });

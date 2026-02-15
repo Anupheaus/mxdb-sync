@@ -47,7 +47,7 @@ function useTypedCollection<RecordType extends Record>(db: ServerDb, dbCollectio
   };
 }
 
-type UseCollection<RecordType extends Record> = ReturnType<typeof useTypedCollection<RecordType>>;
+export type UseCollection<RecordType extends Record> = ReturnType<typeof useTypedCollection<RecordType>>;
 
 export function useCollection<RecordType extends Record>(collection: MXDBCollection<RecordType>): UseCollection<RecordType>;
 export function useCollection<RecordType extends Record = Record>(collectionName: string): UseCollection<RecordType>;

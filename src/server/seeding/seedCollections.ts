@@ -1,9 +1,10 @@
-import { configRegistry } from '../common/registries';
-import { useCollection } from './collections';
+import { configRegistry } from '../../common/registries';
+import { useCollection } from '../collections';
 import { Error, InternalError, is, useLogger } from '@anupheaus/common';
 
-import type { Record } from '@anupheaus/common';
-import type { MXDBCollection } from '../common';
+import type { Logger, Record } from '@anupheaus/common';
+import type { MXDBCollection } from '../../common';
+import { loadSeededData, saveSeededData } from './seededData';
 
 interface EnsureCountPropsWithFixedRecords<RecordType extends Record> {
   count?: number;
@@ -21,10 +22,18 @@ interface EnsureCountPropsWithCreate<RecordType extends Record> {
 
 type EnsureCountProps<RecordType extends Record> = EnsureCountPropsWithFixedRecords<RecordType> | EnsureCountPropsWithCreate<RecordType>;
 
-function seedWith<RecordType extends Record>({ getAll, upsert, remove }: ReturnType<typeof useCollection<RecordType>>) {
+function seedWith<RecordType extends Record>({ getAll, upsert, remove }: ReturnType<typeof useCollection<RecordType>>, seedHash: string, updateSeedHash: (seedHash: string) => void, logger: Logger) {
   return async ({ count: providedCount, fixedRecords, create, validate }: EnsureCountProps<RecordType>) => {
     const count = providedCount ?? fixedRecords?.length;
     if (count == null) throw new InternalError('Count or Fixed Records is required for seeding.');
+    if (fixedRecords != null) {
+      const newSeedHash = Object.hash(fixedRecords);
+      if (newSeedHash === seedHash) {
+        logger.debug('Fixed records have not changed, skipping seeding.');
+        return;
+      }
+      updateSeedHash(newSeedHash);
+    }
     const storedRecords = await getAll();
     const recordIdsToUpsert = new Set<string>();
     const recordIdsToRemove = new Set<string>();
@@ -79,13 +88,13 @@ function seedWith<RecordType extends Record>({ getAll, upsert, remove }: ReturnT
   };
 }
 
-function createSeedUseCollection() {
+function createSeedUseCollection(seedHash: string, updateSeedHash: (seedHash: string) => void, logger: Logger) {
   return <RecordType extends Record>(collection: MXDBCollection<RecordType>) => {
     const result = useCollection<RecordType>(collection);
 
     return {
       ...result,
-      seedWith: seedWith<RecordType>(result),
+      seedWith: seedWith<RecordType>(result, seedHash, updateSeedHash, logger),
     };
   };
 }
@@ -95,6 +104,10 @@ export type UseSeedCollection = ReturnType<typeof createSeedUseCollection>;
 export async function seedCollections(collections: MXDBCollection[]) {
   const logger = useLogger();
   logger.info('Seeding collections...');
+  logger.debug('Loading seeded data...');
+  const seededData = loadSeededData();
+  logger.debug('Seeded data loaded.', { seededDataKeys: Object.keys(seededData) });
+
   for (const collection of collections) {
     const config = configRegistry.get(collection);
     if (config == null) {
@@ -105,11 +118,14 @@ export async function seedCollections(collections: MXDBCollection[]) {
     logger.silly(`Seeding "${collection.name}" collection...`);
     const startTime = Date.now();
     try {
-      await config.onSeed(createSeedUseCollection());
+      await config.onSeed(createSeedUseCollection(seededData[collection.name], seedHash => seededData[collection.name] = seedHash, logger.createSubLogger(collection.name)));
       logger.debug(`Collection "${collection.name}" seeded (time taken: ${Date.now() - startTime}ms).`);
     } catch (error) {
       logger.error(`Error seeding collection "${collection.name}":`, { error: new Error({ error }) });
     }
   }
+  logger.debug('Saving seeded data...');
+  saveSeededData(seededData);
+  logger.debug('Seeded data saved.', { seededDataKeys: Object.keys(seededData) });
   logger.info('Collections seeded.');
 }

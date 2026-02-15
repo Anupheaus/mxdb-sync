@@ -3,7 +3,13 @@ import { DbProvider } from './DbContext';
 import { ServerDb } from './ServerDb';
 import type { MXDBCollection } from '../../../common';
 
-export function provideDb<R>(mongoDbName: string, mongoDbUrl: string, collections: MXDBCollection[], delegate: (db: ServerDb) => R): R {
+export function provideDb<R>(
+  mongoDbName: string,
+  mongoDbUrl: string,
+  collections: MXDBCollection[],
+  delegate: (db: ServerDb) => R,
+  changeStreamDebounceMs?: number,
+): R {
   const logger = useLogger();
 
   const db = new ServerDb({
@@ -11,6 +17,7 @@ export function provideDb<R>(mongoDbName: string, mongoDbUrl: string, collection
     mongoDbUrl,
     collections,
     logger,
+    changeStreamDebounceMs,
   });
 
   return DbProvider.run(db, () => delegate(db));

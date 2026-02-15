@@ -7,6 +7,7 @@ import http from 'http';
 import { configureViews } from './configureViews';
 import { configureStaticFiles } from './configureStaticFiles';
 import { collections } from '../common';
+import './configureExtensions';
 import { actions } from './configureActions';
 import { privateKey } from './private-key';
 

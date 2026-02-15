@@ -14,13 +14,15 @@ export interface ServerConfig extends StartSocketServerConfig {
   mongoDbName: string;
   clearDatabase?: boolean;
   shouldSeedCollections?: boolean;
+  /** Idle window (ms) before change stream events are dispatched; events within this window are batched. Default 20. */
+  changeStreamDebounceMs?: number;
 }
 
 const adminUser: SocketAPIUser = {
   id: Math.emptyId(),
 };
 
-export async function startServer({ logger, collections, mongoDbName, mongoDbUrl, shouldSeedCollections, ...config }: ServerConfig) {
+export async function startServer({ logger, collections, mongoDbName, mongoDbUrl, shouldSeedCollections, changeStreamDebounceMs, ...config }: ServerConfig) {
   if (!logger) logger = Logger.getCurrent();
   if (!logger) logger = new Logger('MXDB-Sync');
   return logger.provide(() => provideDb(mongoDbName, mongoDbUrl, collections, db => startSocketServer({
@@ -47,5 +49,5 @@ export async function startServer({ logger, collections, mongoDbName, mongoDbUrl
       removeClientWatches(client);
       await config.onClientDisconnected?.(client);
     }),
-  })));
+  }), changeStreamDebounceMs));
 }

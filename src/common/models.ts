@@ -45,7 +45,6 @@ export interface MXDBCollectionConfig<RecordType extends Record = any> {
   // onRead?(records: RecordType[]): PromiseMaybe<RecordType[]>;
   disableSync?: boolean;
   disableAudit?: boolean;
-  onSeed?(useCollection: UseCollection): Promise<void>;
 }
 
 export interface UpsertRequest {

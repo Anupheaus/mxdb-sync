@@ -6,23 +6,34 @@ import { dbUtils } from './db-utils';
 
 type OperationType = ServerDbChangeEvent['type'];
 
+/** Default idle window (ms) before dispatching when no stream events have arrived. */
+const DEFAULT_DEBOUNCE_MS = 20;
+
 interface Props {
   collectionName: string;
   callbacks: Set<(event: ServerDbChangeEvent) => void>;
   operationType: OperationType;
+  /** Idle window (ms) before dispatching; events within this window are batched. Default 20. */
+  debounceMs?: number;
+  /** Runs before change callbacks; awaited so clients are notified only after this completes. */
+  onAfterDispatch?: (event: ServerDbChangeEvent) => void | Promise<void>;
 }
 
 export class ServerDbCollectionEvents {
-  constructor({ collectionName, callbacks, operationType }: Props) {
+  constructor({ collectionName, callbacks, operationType, debounceMs, onAfterDispatch }: Props) {
     this.#collectionName = collectionName;
     this.#callbacks = callbacks;
     this.#operationType = operationType;
+    this.#debounceMs = debounceMs ?? DEFAULT_DEBOUNCE_MS;
+    this.#onAfterDispatch = onAfterDispatch;
     this.#insertUpdateEvents = new Map();
     this.#deleteEvents = new Set();
   }
 
   #collectionName: string;
   #operationType: OperationType;
+  #debounceMs: number;
+  #onAfterDispatch: ((event: ServerDbChangeEvent) => void | Promise<void>) | undefined;
   #insertUpdateEvents: Map<string, Record>;
   #deleteEvents: Set<string>;
   #timer: NodeJS.Timeout | undefined;
@@ -48,27 +59,31 @@ export class ServerDbCollectionEvents {
   }
 
   #clearTimer() {
-    if (this.#timer != null) return;
+    if (this.#timer == null) return;
     clearTimeout(this.#timer);
+    this.#timer = undefined;
   }
 
   #startTimer() {
     this.#timer = setTimeout(() => {
-      this.#dispatchEvents();
-    }, 1000);
+      this.#timer = undefined;
+      void this.#dispatchEvents();
+    }, this.#debounceMs);
   }
 
-  #dispatchEvents() {
+  async #dispatchEvents() {
     const operationType = this.#operationType;
+    const event: ServerDbChangeEvent = operationType === 'delete'
+      ? { collectionName: this.#collectionName, type: 'delete', recordIds: Array.from(this.#deleteEvents) }
+      : { collectionName: this.#collectionName, type: operationType, records: Array.from(this.#insertUpdateEvents.values()) };
+
     if (operationType === 'delete') {
-      const recordIds = Array.from(this.#deleteEvents);
-      this.#callbacks.forEach(callback => callback({ collectionName: this.#collectionName, type: 'delete', recordIds }));
       this.#deleteEvents.clear();
     } else {
-      const records = Array.from(this.#insertUpdateEvents.values());
-      this.#callbacks.forEach(callback => callback({ collectionName: this.#collectionName, type: operationType, records }));
       this.#insertUpdateEvents.clear();
     }
-  }
 
+    await Promise.resolve(this.#onAfterDispatch?.(event));
+    this.#callbacks.forEach(callback => callback(event));
+  }
 }

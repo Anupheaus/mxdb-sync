@@ -1,29 +1,24 @@
-import { configRegistry } from '../../common/registries';
+import { getCollectionExtensions, type SeedWithFn, type SeedWithProps } from '../collections/extendCollection';
 import { useCollection } from '../collections';
+import type { UseCollection } from '../collections/useCollection';
 import { Error, InternalError, is, useLogger } from '@anupheaus/common';
 
 import type { Logger, Record } from '@anupheaus/common';
 import type { MXDBCollection } from '../../common';
 import { loadSeededData, saveSeededData } from './seededData';
 
-interface EnsureCountPropsWithFixedRecords<RecordType extends Record> {
-  count?: number;
-  fixedRecords: RecordType[];
-  create?(): RecordType;
-  validate?(record: RecordType): RecordType | boolean | void;
-}
+/** For createSeed() and common UseCollection type – function that returns collection API + seedWith for any collection. */
+export type UseSeedCollection = <RecordType extends Record>(collection: MXDBCollection<RecordType>) => UseCollection<RecordType> & {
+  seedWith: SeedWithFn<RecordType>;
+};
 
-interface EnsureCountPropsWithCreate<RecordType extends Record> {
-  count: number;
-  fixedRecords?: RecordType[];
-  create(): RecordType;
-  validate?(record: RecordType): RecordType | boolean | void;
-}
-
-type EnsureCountProps<RecordType extends Record> = EnsureCountPropsWithFixedRecords<RecordType> | EnsureCountPropsWithCreate<RecordType>;
-
-function seedWith<RecordType extends Record>({ getAll, upsert, remove }: ReturnType<typeof useCollection<RecordType>>, seedHash: string, updateSeedHash: (seedHash: string) => void, logger: Logger) {
-  return async ({ count: providedCount, fixedRecords, create, validate }: EnsureCountProps<RecordType>) => {
+function seedWith<RecordType extends Record>(
+  { getAll, upsert, remove }: ReturnType<typeof useCollection<RecordType>>,
+  seedHash: string,
+  updateSeedHash: (seedHash: string) => void,
+  logger: Logger,
+): SeedWithFn<RecordType> {
+  return async ({ count: providedCount, fixedRecords, create, validate }: SeedWithProps<RecordType>) => {
     const count = providedCount ?? fixedRecords?.length;
     if (count == null) throw new InternalError('Count or Fixed Records is required for seeding.');
     if (fixedRecords != null) {
@@ -88,19 +83,6 @@ function seedWith<RecordType extends Record>({ getAll, upsert, remove }: ReturnT
   };
 }
 
-function createSeedUseCollection(seedHash: string, updateSeedHash: (seedHash: string) => void, logger: Logger) {
-  return <RecordType extends Record>(collection: MXDBCollection<RecordType>) => {
-    const result = useCollection<RecordType>(collection);
-
-    return {
-      ...result,
-      seedWith: seedWith<RecordType>(result, seedHash, updateSeedHash, logger),
-    };
-  };
-}
-
-export type UseSeedCollection = ReturnType<typeof createSeedUseCollection>;
-
 export async function seedCollections(collections: MXDBCollection[]) {
   const logger = useLogger();
   logger.info('Seeding collections...');
@@ -109,16 +91,17 @@ export async function seedCollections(collections: MXDBCollection[]) {
   logger.debug('Seeded data loaded.', { seededDataKeys: Object.keys(seededData) });
 
   for (const collection of collections) {
-    const config = configRegistry.get(collection);
-    if (config == null) {
-      logger.warn(`No config found for collection "${collection.name}", skipping seeding.`);
-      return;
-    }
-    if (config.onSeed == null) continue;
+    const extensions = getCollectionExtensions(collection);
+    if (extensions?.onSeed == null) continue;
     logger.silly(`Seeding "${collection.name}" collection...`);
     const startTime = Date.now();
     try {
-      await config.onSeed(createSeedUseCollection(seededData[collection.name], seedHash => seededData[collection.name] = seedHash, logger.createSubLogger(collection.name)));
+      const seedHash = seededData[collection.name];
+      const updateSeedHash = (newHash: string) => { seededData[collection.name] = newHash; };
+      const subLogger = logger.createSubLogger(collection.name);
+      const api = useCollection(collection);
+      const seedWithFn = seedWith(api, seedHash, updateSeedHash, subLogger);
+      await extensions.onSeed(seedWithFn);
       logger.debug(`Collection "${collection.name}" seeded (time taken: ${Date.now() - startTime}ms).`);
     } catch (error) {
       logger.error(`Error seeding collection "${collection.name}":`, { error: new Error({ error }) });

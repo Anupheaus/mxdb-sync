@@ -1,6 +1,7 @@
 import type { MongoDocOf, MXDBCollection } from '../../../common';
 import type { ChangeStream, ChangeStreamDocument, Db } from 'mongodb';
 import { MongoClient } from 'mongodb';
+import { getCollectionExtensions } from '../../collections/extendCollection';
 import { ServerDbCollection } from './ServerDbCollection';
 import { ServerDbCollectionEvents } from './ServerDbCollectionEvents';
 import type { ServerDbChangeEvent } from './server-db-models';
@@ -14,11 +15,14 @@ interface Props {
   mongoDbUrl: string;
   collections: MXDBCollection[];
   logger: Logger;
+  /** Idle window (ms) for change stream batching; passed to ServerDbCollectionEvents. Default 20. */
+  changeStreamDebounceMs?: number;
 }
 
 export class ServerDb {
   constructor(props: Props) {
     this.#mongoDbName = props.mongoDbName;
+    this.#changeStreamDebounceMs = props.changeStreamDebounceMs;
     this.#client = new MongoClient(props.mongoDbUrl);
     this.#logger = props.logger.createSubLogger('ServerDb');
     this.#dbEvents = new Map();
@@ -36,6 +40,7 @@ export class ServerDb {
   #changeStream: ChangeStream | undefined;
   #dbEvents: Map<string, ServerDbCollectionEvents>;
   #changeCallbacks: Set<(event: ServerDbChangeEvent) => void>;
+  #changeStreamDebounceMs: number | undefined;
 
   public use<RecordType extends Record>(collectionName: string) {
     return this.#collections.get(collectionName) as ServerDbCollection<RecordType>;
@@ -125,6 +130,28 @@ export class ServerDb {
     return new Map(collections.map(collection => [collection.name, new ServerDbCollection({ getDb: () => this.#db, collectionNames: getCollectionNames(), collection, logger: this.#logger })]));
   }
 
+  async #runExtensionHooksAfterChange(event: ServerDbChangeEvent) {
+    const dbCollection = this.#collections.get(event.collectionName);
+    if (dbCollection == null) return;
+    const extensions = getCollectionExtensions(dbCollection.collection);
+    if (extensions == null) return;
+
+    const run = () => {
+      if (event.type === 'delete') {
+        return extensions.onAfterDelete?.({ recordIds: event.recordIds });
+      }
+      const insertedIds = event.type === 'insert' ? event.records.ids() : [];
+      const updatedIds = event.type === 'update' ? event.records.ids() : [];
+      return extensions.onAfterUpsert?.({ records: event.records, insertedIds, updatedIds });
+    };
+
+    try {
+      await this.wrap(() => Promise.resolve(run()))();
+    } catch (error) {
+      this.#logger.error('Extension onAfter hook failed', { collectionName: event.collectionName, type: event.type, error });
+    }
+  }
+
   #startWatching(db: Db) {
     const changeStream = this.#changeStream = db.watch([{ $project: { something: false } }], { fullDocumentBeforeChange: 'whenAvailable' });
     changeStream.on('change', change => {
@@ -138,7 +165,13 @@ export class ServerDb {
         ? 'insert' : ['update', 'replace'].includes(change.operationType) ? 'update' : change.operationType === 'delete' ? 'delete' : undefined;
       if (validOperationType == null) return;
       const key = `${collectionName}-${validOperationType}`;
-      const events = this.#dbEvents.getOrSet(key, () => new ServerDbCollectionEvents({ collectionName, callbacks: this.#changeCallbacks, operationType: validOperationType }));
+      const events = this.#dbEvents.getOrSet(key, () => new ServerDbCollectionEvents({
+        collectionName,
+        callbacks: this.#changeCallbacks,
+        operationType: validOperationType,
+        debounceMs: this.#changeStreamDebounceMs,
+        onAfterDispatch: event => this.#runExtensionHooksAfterChange(event),
+      }));
       events.process(change as ChangeStreamDocument<MongoDocOf<Record>>);
     });
 

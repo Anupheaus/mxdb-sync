@@ -1,5 +1,4 @@
 import { defineCollection } from '../../../src/common';
-import { faker } from '@faker-js/faker';
 
 export interface AddressRecord {
   id: string;
@@ -30,27 +29,9 @@ export const officeAddress: AddressRecord = {
   postcode: 'DE21 6SY',
 };
 
-const totalRequired = 10;
-
 export const addresses = defineCollection<AddressRecord>({
   name: 'addresses',
   indexes: [],
   version: 1,
-  onSeed: async useCollection => {
-    const { upsert, getRecordCount } = useCollection(addresses);
-    const recordCount = await getRecordCount();
-    if (recordCount >= totalRequired) return;
-    await upsert([
-      officeAddress,
-      ...Array.ofSize(totalRequired - recordCount - 1).map((): AddressRecord => ({
-        id: faker.string.uuid(),
-        firstLine: faker.location.streetAddress(),
-        secondLine: faker.location.secondaryAddress(),
-        city: faker.location.city(),
-        county: faker.location.county(),
-        postcode: faker.location.zipCode(),
-      })),
-    ]);
-  },
 });
 

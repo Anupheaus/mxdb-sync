@@ -48,6 +48,7 @@ export class DbCollection<RecordType extends Record = Record> {
   public async upsert(records: RecordType[], userId: string, config?: UpsertConfig): Promise<void>;
   @bind
   public async upsert(records: RecordType | RecordType[], userId: string, config?: UpsertConfig): Promise<void> {
+    let auditError: Error | undefined;
     await this.#loadingPromise;
     if (!Array.isArray(records)) return this.upsert([records].removeNull(), userId, config);
     if (records.length === 0) return;
@@ -65,10 +66,11 @@ export class DbCollection<RecordType extends Record = Record> {
       if (this.#isAudited === false) return;
       const auditRecord = this.#auditRecords.get(record.id);
       const updatedAuditRecord = (() => {
-        if (auditRecord != null) return auditor.updateAuditWith(record, auditRecord, userId);
-        if (auditAction === 'branched') return auditor.createBranchFrom(record);
+        if (auditRecord != null) return auditor.updateAuditWith(record, auditRecord, userId, error => auditError = error);
+        if (auditAction === 'branched') return auditor.createBranchFrom(record, error => auditError = error);
         return auditor.createAuditFrom(record, userId);
       })();
+      if (auditError != null) throw auditError;
       this.#auditRecords.set(record.id, updatedAuditRecord);
       return updatedAuditRecord;
     });

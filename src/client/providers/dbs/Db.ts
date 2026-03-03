@@ -89,7 +89,27 @@ export class Db {
   #updateIndexes(store: IDBObjectStore, indexes: MXDBCollectionIndex[]) {
     const indexesToRemove = Array.from(store.indexNames).filter(name => indexes.findBy('name', name) == null);
     indexesToRemove.forEach(name => store.deleteIndex(name));
-    indexes.forEach(index => store.createIndex(index.name, index.fields, { unique: index.isUnique }));
+    // Ensure we only create each index name once, and avoid throwing if the index already exists.
+    const uniqueByName = new Map<string, MXDBCollectionIndex>();
+    indexes.forEach(index => {
+      if (!uniqueByName.has(index.name)) uniqueByName.set(index.name, index);
+    });
+
+    uniqueByName.forEach(index => {
+      const desiredKeyPath = index.fields as unknown as string | string[];
+      const desiredUnique = index.isUnique === true;
+
+      if (store.indexNames.contains(index.name)) {
+        // If the existing index doesn't match the desired definition, recreate it.
+        const existing = store.index(index.name);
+        const sameKeyPath = JSON.stringify(existing.keyPath) === JSON.stringify(desiredKeyPath);
+        const sameUnique = existing.unique === desiredUnique;
+        if (sameKeyPath && sameUnique) return;
+        store.deleteIndex(index.name);
+      }
+
+      store.createIndex(index.name, desiredKeyPath, { unique: desiredUnique });
+    });
   }
 
   #getAllCollectionNames(collections: MXDBCollectionConfig[]): string[] {

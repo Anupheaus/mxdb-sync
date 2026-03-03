@@ -29,11 +29,10 @@ export function useClient() {
     ids.forEach(id => clientIds.delete(id));
   }
 
-  async function syncRecords<RecordType extends Record>(collection: MXDBCollection<RecordType>, updated: RecordType[], removedIds: string[], doNotFilterIds: boolean = false) {
+  async function syncRecords<RecordType extends Record>(collection: MXDBCollection<RecordType>, updated: RecordType[], removedIds: string[]) {
     const clientIds = getClientIds(collection.name);
     const serverPush = useEvent(mxdbServerPush);
     removedIds = removedIds.filter(id => clientIds.has(id));
-    if (!doNotFilterIds) updated = updated.filter(record => !clientIds.has(record.id));
     if (updated.length === 0 && removedIds.length === 0) return;
     const logger = getLogger(collection.name);
     logger.debug('Syncing records with client', { updated, removedIds });
@@ -43,7 +42,6 @@ export function useClient() {
   }
 
   async function pushRecords<RecordType extends Record>(collection: MXDBCollection<RecordType>, records: RecordType[]) {
-    // console.log('pushing records', { collection: collection.name, recordIds: records.ids(), clientIds: getClientIds(collection.name) });
     await syncRecords(collection, records, []);
   }
 

@@ -116,7 +116,7 @@ export const serverSyncAction = createServerAction(mxdbSyncCollectionsAction, as
   const { syncRecords, addToClientIds, getUser } = useClient();
   const logger = useLogger();
 
-  const result = await requests.mapPromise(async (request): Promise<MXDBSyncResponse> => {
+  const result = await requests.mapAsync(async (request): Promise<MXDBSyncResponse> => {
     logger.info(`Syncing collection "${request.collectionName}"...`, request);
     try {
       const dbCollection = db.use(request.collectionName);
@@ -141,7 +141,7 @@ export const serverSyncAction = createServerAction(mxdbSyncCollectionsAction, as
       // we add all of the ids to the client because the client has these records
       if (acknowledgedIds.length > 0) addToClientIds(collection, acknowledgedIds);
       logger.debug(`Sync complete, updating client for collection "${request.collectionName}"`, { updated, removedIds });
-      if (updated.length > 0 || removedIds.length > 0) await syncRecords(collection, updated, removedIds, true);
+      if (updated.length > 0 || removedIds.length > 0) await syncRecords(collection, updated, removedIds);
       logger.info(`Sync complete for collection "${request.collectionName}"`, { acknowledgedIds });
       return { collectionName: request.collectionName, ids: acknowledgedIds };
     } catch (error) {

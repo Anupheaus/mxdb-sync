@@ -4,7 +4,8 @@ import { useDb } from '../providers';
 import { getCollectionExtensions } from '../collections/extendCollection';
 import type { Record } from '@anupheaus/common';
 
-export const serverUpsertAction = createServerAction(mxdbUpsertAction, async ({ collectionName, records }) => {
+export async function handleUpsert(params: { collectionName: string; records: Record[] }) {
+  const { collectionName, records } = params;
   const db = useDb();
   const dbCollection = db.use<Record>(collectionName);
   const extensions = getCollectionExtensions(dbCollection.collection);
@@ -19,4 +20,6 @@ export const serverUpsertAction = createServerAction(mxdbUpsertAction, async ({ 
   if (extensions?.onBeforeUpsert) await extensions.onBeforeUpsert(payload);
   await dbCollection.upsert(records);
   return recordIds;
-});
+}
+
+export const serverUpsertAction = createServerAction(mxdbUpsertAction, handleUpsert);

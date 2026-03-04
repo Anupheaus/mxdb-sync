@@ -3,7 +3,8 @@ import { mxdbGetAction } from '../../common';
 import { useClient } from '../hooks';
 import { useDb } from '../providers';
 
-export const serverGetAction = createServerAction(mxdbGetAction, async ({ collectionName, ids }) => {
+export async function handleGet(params: { collectionName: string; ids: string[] }) {
+  const { collectionName, ids } = params;
   const db = useDb();
   const dbCollection = db.use(collectionName);
   const { pushRecords } = useClient();
@@ -12,4 +13,6 @@ export const serverGetAction = createServerAction(mxdbGetAction, async ({ collec
   if (records == null || records.length === 0) return [];
   await pushRecords(dbCollection.collection, records);
   return records.ids();
-});
+}
+
+export const serverGetAction = createServerAction(mxdbGetAction, handleGet);

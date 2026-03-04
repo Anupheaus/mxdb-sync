@@ -5,7 +5,8 @@ import { useDb } from '../providers';
 import { useLogger } from '@anupheaus/common';
 import { getCollectionExtensions } from '../collections/extendCollection';
 
-export const serverRemoveAction = createServerAction(mxdbRemoveAction, async ({ collectionName, recordIds, locallyOnly }) => {
+export async function handleRemove(params: { collectionName: string; recordIds: string[]; locallyOnly: boolean }) {
+  const { collectionName, recordIds, locallyOnly } = params;
   const db = useDb();
   const dbCollection = db.use(collectionName);
   const logger = useLogger();
@@ -20,4 +21,6 @@ export const serverRemoveAction = createServerAction(mxdbRemoveAction, async ({ 
     logger.info(`Removing ${recordIds.length} records`, { collectionName, recordIds });
     await dbCollection.delete(recordIds);
   }
-});
+}
+
+export const serverRemoveAction = createServerAction(mxdbRemoveAction, handleRemove);

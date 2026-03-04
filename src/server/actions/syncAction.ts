@@ -17,7 +17,7 @@ interface ProcessIdsProps {
   ackIds: Set<string>;
 }
 
-function processIds({ ids, existingRecords, existingAudits, removeIds, updateRecords, logger, collectionName, ackIds }: ProcessIdsProps) {
+export function processIds({ ids, existingRecords, existingAudits, removeIds, updateRecords, logger, collectionName, ackIds }: ProcessIdsProps) {
   // these ids are the ones that the client has downloaded before, so we need to check if they have been updated since then
   ids.forEach(({ id, timestamp }) => {
     const existingAudit = existingAudits.findById(id);
@@ -52,7 +52,7 @@ interface ProcessUpdatesProps {
   userId: string;
 }
 
-function processUpdates({ audits, existingAudits, logger, collectionName, updateAudits, ackIds, userId }: ProcessUpdatesProps) {
+export function processUpdates({ audits, existingAudits, logger, collectionName, updateAudits, ackIds, userId }: ProcessUpdatesProps) {
   // these are the audits that need to be updated
   audits.forEach(audit => {
     const existingAudit = existingAudits.findById(audit.id);
@@ -92,7 +92,7 @@ interface ProcessAuditsProps {
   updateRecords: Map<string, Record>;
 }
 
-function processAudits({ audits, existingRecords, removeIds, updateRecords }: ProcessAuditsProps) {
+export function processAudits({ audits, existingRecords, removeIds, updateRecords }: ProcessAuditsProps) {
   // just make sure that records are created from the audits provided
   audits.forEach(audit => {
     const existingRecord = existingRecords.findById(audit.id);

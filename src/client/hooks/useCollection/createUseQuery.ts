@@ -9,6 +9,7 @@ export function createUseQuery<RecordType extends Record>(query: Query<RecordTyp
 
   return (props: AddDebugTo<AddDisableTo<QueryProps<RecordType>>> = {}) => {
     const { setState, getState } = useSyncState(() => ({ records: [] as RecordType[], total: 0, isLoading: true }));
+    const lastResponseRef = useRef<Partial<ReturnType<typeof getState>>>();
     const requestIdRef = useRef('');
 
     useMemo(() => {
@@ -22,8 +23,9 @@ export function createUseQuery<RecordType extends Record>(query: Query<RecordTyp
         query(props, ({ records, total }) => {
           if (props.debug) console.log('[MXDB-Sync] Received query response', { requestId, records, total }); // eslint-disable-line no-console
           if (requestId !== requestIdRef.current) return;
+          lastResponseRef.current = { records, total }; // store the last response to be used when the query is disabled and then the same props are passed again, the onSameResponse callback will be called
           setState({ records, total, isLoading: false });
-        }, () => setState(s => ({ ...s, isLoading: false })));
+        }, () => setState(s => ({ ...s, ...lastResponseRef.current, isLoading: false })));
       }
     }, [Object.hash(props)]);
 

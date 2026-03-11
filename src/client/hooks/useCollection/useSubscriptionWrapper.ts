@@ -62,7 +62,7 @@ export function useSubscriptionWrapper<RecordType extends Record, Request extend
     const execute = async () => {
       if (debug) console.log('[MXDB-Sync] Executing query locally', { disable, request }); // eslint-disable-line no-console
       if (disable) {
-        if (debug) console.log('[MXDB-Sync] Query is disabled, returning default', { disable, request }); // eslint-disable-line no-console
+        if (debug) console.log('[MXDB-Sync] Query is disabled, returning default', { disable, request }); // eslint-disable-line no-console        
         return onDefaultResponse();
       }
       const requestId = lastRequestIdRef.current = Math.uniqueId();

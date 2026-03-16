@@ -42,7 +42,8 @@
     "start": "webpack --mode development",
     "server": "webpack --mode development --name server",
     "client": "webpack --mode development --name client --profile",
-    "test": "vitest --environment jsdom"
+    "test": "vitest --environment jsdom",
+    "test:sync": "cross-env NODE_EXTRA_CA_CERTS=./tests/sync-test/certs/ca.crt NODE_OPTIONS=--require=./tests/sync-test/preload-tls.cjs vitest run --config vitest.sync.config.ts"
   },
   "files": [
     "dist"
@@ -80,6 +81,7 @@
     "koa-static": "^5.0.0",
     "buffer": "^6.0.3",
     "copy-webpack-plugin": "^11.0.0",
+    "cross-env": "^7.0.3",
     "eslint": "^8.19.0",
     "jsdom": "^24.0.0",
     "nodemon-webpack-plugin": "^4.8.1",
@@ -95,6 +97,8 @@
     "util": "^0.12.5",
     "vitest": "^1.2.2",
     "webpack": "^5.91.0",
+    "fake-indexeddb": "^6.2.5",
+    "mongodb-memory-server": "^10.0.0",
     "webpack-cli": "^5.1.4",
     "webpack-inject-plugin": "^1.5.5",
     "webpack-node-externals": "^3.0.0"

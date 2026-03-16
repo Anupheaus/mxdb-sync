@@ -35,7 +35,14 @@ export function processIds({ ids, existingRecords, existingAudits, removeIds, up
         // the saved audit is newer than the client's audit, so we need to update the client
         updateRecords.set(id, existingRecord);
       } else {
-        // the client's audit is newer, which means the server audit has not changed, so we don't need to do anything
+        // The server audit has not changed, but the server's materialised record can drift
+        // (e.g. a prior upsert/delete failed mid-flight). Enforce server audit -> record.
+        const materialized = auditor.createRecordFrom(existingAudit);
+        if (materialized == null) {
+          removeIds.add(id);
+        } else if (existingRecord == null || !is.deepEqual(existingRecord, materialized)) {
+          updateRecords.set(id, materialized);
+        }
         ackIds.add(id);
       }
     }
@@ -45,40 +52,72 @@ export function processIds({ ids, existingRecords, existingAudits, removeIds, up
 interface ProcessUpdatesProps {
   audits: AuditOf<Record>[];
   existingAudits: AuditOf<Record>[];
+  existingRecords: Record[];
+  removeIds: Set<string>;
+  updateRecords: Map<string, Record>;
   logger: Logger;
   collectionName: string;
   updateAudits: Map<string, AuditOf<Record>>;
   ackIds: Set<string>;
-  userId: string;
 }
 
-export function processUpdates({ audits, existingAudits, logger, collectionName, updateAudits, ackIds, userId }: ProcessUpdatesProps) {
+export function processUpdates({ audits, existingAudits, existingRecords, removeIds, updateRecords, logger, collectionName, updateAudits, ackIds }: ProcessUpdatesProps) {
   // these are the audits that need to be updated
   audits.forEach(audit => {
     const existingAudit = existingAudits.findById(audit.id);
 
     if (existingAudit == null) {
-      // we have a branch audit, but no existing one, could be a new record
-      const newAudit = auditor.createFromBranch(audit, userId);
-      if (newAudit == null) {
-        // the new audit is not valid, so we need to remove the id from the front end
-        logger.error(`The new audit for record "${audit.id}" in collection "${collectionName}" is not valid`);
-      } else {
-        // the new audit is valid, so we need to update the audit
-        updateAudits.set(audit.id, newAudit);
+      // No existing audit on the server: this is the first time we see this id.
+      // Treat the client's audit as the authoritative initial history; processAudits
+      // will materialise or delete the record via auditor.createRecordFrom.
+      if (!auditor.isAudit(audit)) {
+        logger.error(`The new audit for a record in collection "${collectionName}" is not a valid audit object`, { audit });
+        return;
       }
+      updateAudits.set(audit.id, audit);
     } else {
-      // we have an existing audit, so we need to merge the new audit with the existing one
-      const mergedAudit = auditor.merge(existingAudit, audit);
+      // Merge client's audit history with server's so the full sequence of user
+      // changes is preserved. The auditor applies ops one-by-one and skips remove
+      // when the path is already missing, so duplicate/out-of-order removes do not throw.
+
+      // Detect potential conflicts by checking if timestamps overlap
+      const clientLastTimestamp = auditor.lastUpdated(audit);
+      const serverLastTimestamp = auditor.lastUpdated(existingAudit);
+
+      if (clientLastTimestamp != null && serverLastTimestamp != null &&
+        Math.abs(clientLastTimestamp - serverLastTimestamp) < 1000) {
+        // Potential concurrent operation within 1 second - log for debugging
+        logger.debug(`Potential concurrent operation detected for record "${audit.id}" in collection "${collectionName}"`, {
+          clientTimestamp: clientLastTimestamp,
+          serverTimestamp: serverLastTimestamp,
+          clientId: (audit.history.last() as any)?.userId,
+          serverAuditId: existingAudit.id
+        });
+      }
+
+      // Extract the client's current record from their audit for validation
+      const clientCurrentRecord = updateRecords.get(audit.id);
+      if (clientCurrentRecord == null) {
+        logger.error(`The client's current record for record "${audit.id}" in collection "${collectionName}" is not found`, { audit });
+        return;
+      }
+
+      const mergedAudit = auditor.merge(existingAudit, audit, clientCurrentRecord);
       const mergedAuditDate = auditor.lastUpdated(mergedAudit);
       const existingAuditDate = auditor.lastUpdated(existingAudit);
-      // if the merged audit is not valid, something went wrong with the merge
       if (mergedAuditDate == null || existingAuditDate == null) {
         logger.error(`The merged audit date or the existing audit date for record "${audit.id}" in collection "${collectionName}" is not valid`, { mergedAuditDate, existingAuditDate });
       } else if (mergedAuditDate !== existingAuditDate) {
         updateAudits.set(audit.id, mergedAudit);
       } else {
-        // the merged audit date is the same as the existing audit date, so we don't need to do anything
+        // Even if the audit itself is unchanged, the server's materialised record can drift.
+        const existingRecord = existingRecords.findById(audit.id);
+        const materialized = auditor.createRecordFrom(existingAudit);
+        if (materialized == null) {
+          removeIds.add(audit.id);
+        } else if (existingRecord == null || !is.deepEqual(existingRecord, materialized)) {
+          updateRecords.set(audit.id, materialized);
+        }
         ackIds.add(audit.id);
       }
     }
@@ -113,14 +152,13 @@ export function processAudits({ audits, existingRecords, removeIds, updateRecord
 
 export const serverSyncAction = createServerAction(mxdbSyncCollectionsAction, async requests => {
   const db = useDb();
-  const { syncRecords, addToClientIds, getUser } = useClient();
+  const { syncRecords, addToClientIds } = useClient();
   const logger = useLogger();
 
   const result = await requests.mapAsync(async (request): Promise<MXDBSyncResponse> => {
     logger.info(`Syncing collection "${request.collectionName}"...`, request);
     try {
       const dbCollection = db.use(request.collectionName);
-      const userId = getUser()?.id ?? Math.emptyId();
       const allIds = request.ids.ids().concat(request.updates.ids()).distinct();
       const existingRecords = await dbCollection.get(allIds);
       const existingAudits = await dbCollection.getAudit(allIds);
@@ -129,7 +167,7 @@ export const serverSyncAction = createServerAction(mxdbSyncCollectionsAction, as
       const updateAudits = new Map<string, AuditOf<Record>>();
       const ackIds = new Set<string>();
       processIds({ ids: request.ids, existingRecords, existingAudits, removeIds, updateRecords, logger, collectionName: request.collectionName, ackIds });
-      processUpdates({ audits: request.updates, existingAudits, logger, collectionName: request.collectionName, updateAudits, ackIds, userId });
+      processUpdates({ audits: request.updates, existingAudits, existingRecords, removeIds, updateRecords, logger, collectionName: request.collectionName, updateAudits, ackIds });
       processAudits({ audits: updateAudits, existingRecords, removeIds, updateRecords });
       const updated = Array.from(updateRecords.values());
       const removedIds = Array.from(removeIds);
@@ -138,6 +176,15 @@ export const serverSyncAction = createServerAction(mxdbSyncCollectionsAction, as
       const updatedAudits = Array.from(updateAudits.values());
       logger.debug(`Sync plan for collection "${request.collectionName}"`, { updated, updatedAudits, removedIds, acknowledgedIds });
       if (updated.length > 0 || updatedAudits.length > 0 || removedIds.length > 0) await dbCollection.sync({ updated, updatedAudits, removedIds });
+      // Structured log for test diagnostics: what the server actually persisted/removed
+      logger.info('sync_complete', {
+        collectionName: request.collectionName,
+        updatedCount: updated.length,
+        removedCount: removedIds.length,
+        updatedIds: updated.ids().slice(0, 30),
+        removedIds: removedIds.slice(0, 30),
+        acknowledgedCount: acknowledgedIds.length,
+      });
       // we add all of the ids to the client because the client has these records
       if (acknowledgedIds.length > 0) addToClientIds(collection, acknowledgedIds);
       logger.debug(`Sync complete, updating client for collection "${request.collectionName}"`, { updated, removedIds });

@@ -6,6 +6,7 @@ import type { SocketAPIAction, SocketAPISubscription } from '@anupheaus/socket-a
 import { useLayoutEffect, useRef } from 'react';
 import { DateTime } from 'luxon';
 import type { AddDebugTo, AddDisableTo } from '../../../common/internalModels';
+import { ACTION_TIMEOUT_MS, withTimeout } from '../../utils/actionTimeout';
 
 const RequestCancelled = Symbol('RequestCancelled');
 
@@ -113,22 +114,30 @@ export function useSubscriptionWrapper<RecordType extends Record, Request extend
     };
 
     if (debug) console.log('[MXDB-Sync] Invoking remote query', { disable, isActionRequired, request }); // eslint-disable-line no-console
-    remoteQueryCalledRef.current = await remoteInvoke({
-      request: (onRequestTransform?.(request) ?? request) as RemoteRequest,
-      disable: disable || isActionRequired,
-      debug,
-      onEmptyUpdate: onRemoteDefaultResponse,
-      onUpdate: async response => {
-        if (debug) console.log('[MXDB-Sync] Received remote query response', { disable, isActionRequired, request, response }); // eslint-disable-line no-console
-        await onRemoteResponse?.(response);
-        await executeValidateAndUpdate();
-        remoteQueryCalledRef.current = false;
-      },
-    });
+    remoteQueryCalledRef.current = await withTimeout(
+      remoteInvoke({
+        request: (onRequestTransform?.(request) ?? request) as RemoteRequest,
+        disable: disable || isActionRequired,
+        debug,
+        onEmptyUpdate: onRemoteDefaultResponse,
+        onUpdate: async response => {
+          if (debug) console.log('[MXDB-Sync] Received remote query response', { disable, isActionRequired, request, response }); // eslint-disable-line no-console
+          await onRemoteResponse?.(response);
+          await executeValidateAndUpdate();
+          remoteQueryCalledRef.current = false;
+        },
+      }),
+      ACTION_TIMEOUT_MS,
+      `${subscription.name}(subscription:${collection.name})`,
+    );
 
     if (isActionRequired) {
       if (debug) console.log('[MXDB-Sync] Invoking action', { disable, isActionRequired, request }); // eslint-disable-line no-console
-      const result = await actionResult[action.name]((onRequestTransform?.(request) ?? request) as RemoteRequest);
+      const result = await withTimeout(
+        actionResult[action.name]((onRequestTransform?.(request) ?? request) as RemoteRequest),
+        ACTION_TIMEOUT_MS,
+        `${action.name}(${collection.name})`,
+      );
       if (debug) console.log('[MXDB-Sync] Received action response', { disable, isActionRequired, request, result }); // eslint-disable-line no-console
       await onRemoteResponse?.(result);
     }

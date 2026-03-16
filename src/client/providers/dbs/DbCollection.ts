@@ -102,10 +102,6 @@ export class DbCollection<RecordType extends Record = Record> {
       const id = is.not.blank(idOrRecord) ? idOrRecord : idOrRecord.id;
       const record = this.#records.get(id);
       if (record == null) return;
-      if (this.#isAudited && keepIfHasHistory === true) {
-        const auditRecord = this.#auditRecords.get(id);
-        if (auditRecord && auditor.hasHistory(auditRecord)) return;
-      }
       this.#records.delete(id);
       if (this.#isAudited === false) return id;
       const auditRecord = this.#auditRecords.get(id);

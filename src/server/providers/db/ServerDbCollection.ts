@@ -139,7 +139,16 @@ export class ServerDbCollection<RecordType extends Record = Record> {
     const upsertedRecordCount = result.matchedCount + result.upsertedCount;
     const recordCount = records.length;
     if (upsertedRecordCount !== recordCount) throw new InternalError(`Upsert failed - count of upserted records (${upsertedRecordCount}) does not match the count of records to upsert (${recordCount})`);
-    if (this.#config.disableAudit !== true) this.#upsertAudit(existingRecords, records, { resetAudit }); // do not wait on the audit update
+    if (this.#config.disableAudit !== true) {
+      // Do not block the request on audit maintenance, but also never allow an audit failure
+      // to become an unhandled rejection (which can take down the process).
+      void this.#upsertAudit(existingRecords, records, { resetAudit }).catch(error => {
+        this.#logger.error('Audit upsert failed', {
+          error: String((error as any)?.message ?? error),
+          stack: (error as any)?.stack,
+        });
+      });
+    }
   }
 
   public async delete(id: string, props?: DeleteProps): Promise<void>;
@@ -250,12 +259,56 @@ export class ServerDbCollection<RecordType extends Record = Record> {
 
       let existingAuditRecord = existingAuditRecords.findById(record.id);
       const existingRecord = existingRecords.findById(record.id);
+
       if (existingRecord != null && existingAuditRecord != null) {
+        // Capture exact replay failures (diff op + path) without crashing.
+        const auditErrors: Error[] = [];
+        const existingRecordFromAudit = auditor.createRecordFrom(existingAuditRecord, undefined, e => auditErrors.push(e));
+
+        if (auditErrors.length > 0) {
+          const err = auditErrors[0] as any;
+          const meta = err?.meta ?? err?.cause?.meta;
+          this.#logger.error('Corrupt/unreplayable audit detected', {
+            collectionName: this.#collection.name,
+            recordId: record.id,
+            auditId: existingAuditRecord.id,
+            error: String(err?.message ?? err),
+            // best-effort: include auditor InternalError meta (operation + underlying error)
+            meta,
+            historyLength: existingAuditRecord.history.length,
+            historyTail: existingAuditRecord.history.slice(-5),
+          });
+          // For now: do NOT mutate the audit. Keep it as-is for investigation.
+          // Also: avoid throwing here so the server doesn't fall over.
+          return;
+        }
+
+        if (!is.deepEqual(existingRecordFromAudit, existingRecord)) {
+          // DB record diverged from what audit says; reconcile audit with DB (should not throw)
+          existingAuditRecord = auditor.updateAuditWith(existingRecord, existingAuditRecord, Math.emptyId(), e => {
+            this.#logger.error('Audit reconcile failed', {
+              collectionName: this.#collection.name,
+              recordId: record.id,
+              auditId: existingAuditRecord!.id,
+              error: String((e as any)?.message ?? e),
+              meta: (e as any)?.meta,
+            });
+          });
+        }
+
         if (is.deepEqual(existingRecord, record)) return;
-        const existingRecordFromAudit = auditor.createRecordFrom(existingAuditRecord);
-        if (!is.deepEqual(existingRecordFromAudit, existingRecord)) existingAuditRecord = auditor.updateAuditWith(existingRecord, existingAuditRecord, Math.emptyId());
       }
-      return existingAuditRecord == null ? auditor.createAuditFrom(record, userId) : auditor.updateAuditWith(record, existingAuditRecord, userId);
+
+      if (existingAuditRecord == null) return auditor.createAuditFrom(record, userId);
+      return auditor.updateAuditWith(record, existingAuditRecord, userId, e => {
+        this.#logger.error('Audit update failed', {
+          collectionName: this.#collection.name,
+          recordId: record.id,
+          auditId: existingAuditRecord!.id,
+          error: String((e as any)?.message ?? e),
+          meta: (e as any)?.meta,
+        });
+      });
     });
     await this.#writeAuditRecords(newAuditRecords);
   }

@@ -10,7 +10,17 @@ export async function synchroniseCollections(db: Db, collections: MXDBCollection
   const requests = await collections.mapPromise(async (collection): Promise<MXDBSyncRequest> => {
     const dbCollection = db.use(collection.name);
     const audits = await dbCollection.getAllAudits();
-    const withHistory = audits.filter(audit => auditor.hasHistory(audit));
+    // We treat any audit that either:
+    // - has history (auditor.hasHistory) OR
+    // - has never been branched (i.e. initial "created" audit)
+    // as an "update" to send to the server.
+    //
+    // Pure "branched-only" audits (no further history) are treated as ids markers instead.
+    const withHistory = audits.filter(audit => {
+      if (auditor.hasHistory(audit)) return true;
+      const hasBranched = audit.history.some(op => op.type === 'branched');
+      return !hasBranched;
+    });
     const withoutHistory = audits.except(withHistory);
 
     const ids = withoutHistory.mapWithoutNull(({ id, history }) => ((auditRecord: AuditRecord | undefined): MXDBSyncId | undefined => auditRecord == null ? undefined : ({

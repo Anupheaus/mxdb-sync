@@ -4,6 +4,8 @@ import type { DbCollection } from '../../providers';
 import { useSync } from '../../providers';
 import { useAction, useSocketAPI } from '@anupheaus/socket-api/client';
 
+import { ACTION_TIMEOUT_MS, withTimeout } from '../../utils/actionTimeout';
+
 interface GetProps {
   locallyOnly?: boolean;
 }
@@ -22,7 +24,11 @@ export function createGet<RecordType extends Record>(dbCollection: DbCollection<
     const records = await dbCollection.get(ids);
     // only fetch if we aren't solely looking locally and we don't have all the records locally and we are online
     if (!locallyOnly && ids.length > records.length && getIsConnected()) {
-      const idsRetrieved = await getRecordFromServer({ collectionName: dbCollection.name, ids });
+      const idsRetrieved = await withTimeout(
+        getRecordFromServer({ collectionName: dbCollection.name, ids }),
+        ACTION_TIMEOUT_MS,
+        `mxdbGetAction(${dbCollection.name})`,
+      );
       return dbCollection.get(idsRetrieved);
     }
     return records;

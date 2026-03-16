@@ -20,3 +20,12 @@ certs
 
 .env
 *.env
+
+# Sync test logs (nanosecond-timestamped run logs)
+tests/sync-test/logs/
+
+# Never commit private keys / local cert material
+*.key
+*.pem
+tests/sync-test/certs/
+2048

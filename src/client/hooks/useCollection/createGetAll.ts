@@ -4,6 +4,8 @@ import { useSync } from '../../providers';
 import { useAction, useSocketAPI } from '@anupheaus/socket-api/client';
 import type { DbCollection } from '../../providers';
 
+import { ACTION_TIMEOUT_MS, withTimeout } from '../../utils/actionTimeout';
+
 interface GetProps {
   locallyOnly?: boolean;
 }
@@ -17,7 +19,11 @@ export function createGetAll<RecordType extends Record>(dbCollection: DbCollecti
     await finishSyncing();
     const records = await dbCollection.getAll();
     if (!locallyOnly && records.length === 0 && getIsConnected()) {
-      await getAllFromServer({ collectionName: dbCollection.name });
+      await withTimeout(
+        getAllFromServer({ collectionName: dbCollection.name }),
+        ACTION_TIMEOUT_MS,
+        `mxdbGetAllAction(${dbCollection.name})`,
+      );
       return dbCollection.getAll();
     }
     return records;

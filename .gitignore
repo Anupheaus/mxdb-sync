@@ -24,6 +24,9 @@ certs
 # Sync test logs (nanosecond-timestamped run logs)
 tests/sync-test/logs/
 
+# E2E run logs (same format as sync-test)
+tests/e2e/logs/
+
 # Never commit private keys / local cert material
 *.key
 *.pem

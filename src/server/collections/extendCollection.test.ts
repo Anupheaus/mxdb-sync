@@ -21,7 +21,6 @@ describe('extendCollection', () => {
   beforeEach(() => {
     collection = defineCollection<TestRecord>({
       name: 'extend-test',
-      version: 1,
       indexes: [],
     });
   });

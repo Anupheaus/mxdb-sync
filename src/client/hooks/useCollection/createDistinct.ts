@@ -5,7 +5,7 @@ import { mxdbDistinctAction, mxdbDistinctSubscription } from '../../../common';
 import type { DbCollection } from '../../providers';
 import type { UseSubscription } from './createUseSubscription';
 import { useSubscriptionWrapper } from './useSubscriptionWrapper';
-import type { AddDisableTo } from '../../../common/internalModels';
+import type { AddDisableTo } from '../../../common/models';
 
 export function createDistinct<RecordType extends Record>(collection: DbCollection<RecordType>, useSubscription: UseSubscription, logger: Logger) {
   const distinct = useSubscriptionWrapper<RecordType, DistinctProps<RecordType>, DistinctResults<RecordType>, DistinctRequest, string>({

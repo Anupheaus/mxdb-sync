@@ -1,36 +1,84 @@
-import type { AuditOf, DataFilters, DataRequest, Record, Unsubscribe } from '@anupheaus/common';
-import { auditor, bind, DataSorts, is } from '@anupheaus/common';
-import { utils } from './utils';
-import { deserialise } from './transforms';
+import type { DataRequest, Logger, Record, Unsubscribe } from '@anupheaus/common';
+import { bind, is } from '@anupheaus/common';
+import { serialise, deserialise } from './transforms';
 import type { DistinctProps, DistinctResults, MXDBCollectionConfig, QueryResults } from '../../../common/models';
 import type { MXDBCollectionEvent } from './models';
-import { SYNC_COLLECTION_SUFFIX } from './dbs-consts';
-import sift, { type Query as Filter } from 'sift';
+import { AUDIT_TABLE_SUFFIX, LIVE_TABLE_SUFFIX } from './dbs-consts';
+import { auditor } from '../../../common';
+import type { AuditEntry, AuditOf } from '../../../common';
+import { AuditEntryType } from '../../../common';
+import { decodeTime, ulid } from 'ulidx';
+import type { SqliteWorkerClient } from '../../db-worker/SqliteWorkerClient';
+import { filtersToSql } from '../../db-worker/filtersToSql';
+import { sortsToSql } from '../../db-worker/sortsToSql';
 
 export interface UpsertConfig {
   auditAction?: 'branched' | 'default';
+  branchUlid?: string;
   ifHasHistory?: 'default' | 'doNotUpsert';
 }
 
 export interface DeleteConfig {
-  keepIfHasHistory?: boolean;
   auditAction?: 'remove' | 'default';
 }
 
+// ─── SQLite row shapes ────────────────────────────────────────────────────────
+
+interface LiveRow { id: string; data: string; }
+interface AuditRow { id: string; recordId: string; type: number; timestamp: number; record: string | null; ops: string | null; }
+
+// ─── AuditOf ↔ rows helpers ───────────────────────────────────────────────────
+
+function entriesToRows(recordId: string, entries: AuditEntry[]): AuditRow[] {
+  return entries.map(entry => ({
+    id: entry.id,
+    recordId,
+    type: entry.type,
+    timestamp: decodeTime(entry.id),
+    record: 'record' in entry && entry.record != null ? JSON.stringify(serialise(entry.record as Record)) : null,
+    ops: 'ops' in entry && entry.ops != null ? JSON.stringify(entry.ops) : null,
+  }));
+}
+
+function rowsToAuditOf<T extends Record = Record>(recordId: string, rows: AuditRow[]): AuditOf<T> {
+  const entries: AuditEntry<T>[] = rows.map(row => {
+    const base = { id: row.id, type: row.type };
+    if (row.type === AuditEntryType.Created) {
+      return { ...base, record: row.record != null ? deserialise(JSON.parse(row.record)) : null } as AuditEntry<T>;
+    }
+    if (row.type === AuditEntryType.Restored) {
+      if (row.record == null) return base as AuditEntry<T>;
+      return { ...base, record: deserialise(JSON.parse(row.record)) } as AuditEntry<T>;
+    }
+    if (row.type === AuditEntryType.Updated) {
+      return { ...base, ops: row.ops != null ? JSON.parse(row.ops) : [] } as AuditEntry<T>;
+    }
+    return base as AuditEntry<T>;
+  });
+  return { id: recordId, entries };
+}
+
+// ─── DbCollection ─────────────────────────────────────────────────────────────
+
 export class DbCollection<RecordType extends Record = Record> {
-  constructor(db: Promise<IDBDatabase>, config: MXDBCollectionConfig<RecordType>) {
+  constructor(
+    worker: SqliteWorkerClient,
+    ready: Promise<void>,
+    config: MXDBCollectionConfig<RecordType>,
+    logger?: Logger,
+  ) {
     this.#name = config.name;
-    this.#isAudited = config.disableAudit !== true;
-    this.#db = db;
+    this.#worker = worker;
     this.#records = new Map();
     this.#auditRecords = new Map();
     this.#callbacks = new Set();
-    this.#loadingPromise = this.#loadData();
+    this.#logger = logger;
+    this.#loadingPromise = ready.then(() => this.#loadData());
   }
 
   #name: string;
-  #isAudited: boolean;
-  #db: Promise<IDBDatabase>;
+  #logger: Logger | undefined;
+  #worker: SqliteWorkerClient;
   #records: Map<string, RecordType>;
   #auditRecords: Map<string, AuditOf<RecordType>>;
   #loadingPromise: Promise<void>;
@@ -38,45 +86,12 @@ export class DbCollection<RecordType extends Record = Record> {
 
   public get name() { return this.#name; }
 
+  // ─── Read API (from in-memory cache) ─────────────────────────────────────
+
   @bind
   public async getAll(): Promise<RecordType[]> {
     await this.#loadingPromise;
     return Array.from(this.#records.values());
-  }
-
-  public async upsert(record: RecordType, userId: string, config?: UpsertConfig): Promise<void>;
-  public async upsert(records: RecordType[], userId: string, config?: UpsertConfig): Promise<void>;
-  @bind
-  public async upsert(records: RecordType | RecordType[], userId: string, config?: UpsertConfig): Promise<void> {
-    let auditError: Error | undefined;
-    await this.#loadingPromise;
-    if (!Array.isArray(records)) return this.upsert([records].removeNull(), userId, config);
-    if (records.length === 0) return;
-    const { auditAction = 'default', ifHasHistory = 'default' } = config ?? {};
-    const upsertedRecords: RecordType[] = [];
-    const auditRecords = records.mapWithoutNull(record => {
-      const oldRecord = this.#records.get(record.id);
-      if (is.deepEqual(oldRecord, record)) return;
-      if (this.#isAudited && ifHasHistory === 'doNotUpsert') {
-        const auditRecord = this.#auditRecords.get(record.id);
-        if (auditRecord && auditor.hasHistory(auditRecord)) return;
-      }
-      this.#records.set(record.id, record);
-      upsertedRecords.push(record);
-      if (this.#isAudited === false) return;
-      const auditRecord = this.#auditRecords.get(record.id);
-      const updatedAuditRecord = (() => {
-        if (auditRecord != null) return auditor.updateAuditWith(record, auditRecord, userId, error => auditError = error);
-        if (auditAction === 'branched') return auditor.createBranchFrom(record, error => auditError = error);
-        return auditor.createAuditFrom(record, userId);
-      })();
-      if (auditError != null) throw auditError;
-      this.#auditRecords.set(record.id, updatedAuditRecord);
-      return updatedAuditRecord;
-    });
-    if (upsertedRecords.length === 0) return;
-    this.#upsert(upsertedRecords, auditRecords);
-    this.#invokeOnChange({ type: 'upsert', records: upsertedRecords, auditAction });
   }
 
   public async get(id: string): Promise<RecordType | undefined>;
@@ -88,79 +103,191 @@ export class DbCollection<RecordType extends Record = Record> {
     return idOrIds.map(id => this.#records.get(id)).removeNull();
   }
 
-  public async delete(id: string, userId: string, config?: DeleteConfig): Promise<boolean>;
-  public async delete(ids: string[], userId: string, config?: DeleteConfig): Promise<boolean>;
-  public async delete(record: RecordType, userId: string, config?: DeleteConfig): Promise<boolean>;
-  public async delete(records: RecordType[], userId: string, config?: DeleteConfig): Promise<boolean>;
+  public async getAudit(id: string): Promise<AuditOf<RecordType> | undefined>;
+  public async getAudit(ids: string[]): Promise<AuditOf<RecordType>[]>;
   @bind
-  public async delete(idsOrRecords: string | string[] | RecordType | RecordType[], userId: string, config?: DeleteConfig): Promise<boolean> {
+  public async getAudit(idOrIds: string | string[]): Promise<AuditOf<RecordType> | AuditOf<RecordType>[] | undefined> {
     await this.#loadingPromise;
-    if (!Array.isArray(idsOrRecords)) return this.delete([idsOrRecords].removeNull() as any, userId, config);
+    if (!Array.isArray(idOrIds)) return this.#auditRecords.get(idOrIds);
+    return idOrIds.map(id => this.#auditRecords.get(id)).removeNull();
+  }
+
+  // ─── Upsert ───────────────────────────────────────────────────────────────
+
+  public async upsert(record: RecordType, auditAction?: 'default'): Promise<void>;
+  public async upsert(record: RecordType, auditAction: 'branched', branchUlid?: string): Promise<void>;
+  @bind
+  public async upsert(record: RecordType, auditAction: 'default' | 'branched' = 'default', branchUlid?: string): Promise<void> {
+    await this.#loadingPromise;
+    const oldRecord = this.#records.get(record.id);
+    if (auditAction === 'default' && is.deepEqual(oldRecord, record)) return;
+
+    this.#records.set(record.id, record);
+
+    const existingAudit = this.#auditRecords.get(record.id);
+    let newAuditRecord: AuditOf<RecordType>;
+    if (auditAction === 'branched') {
+      const anchorUlid = branchUlid ?? ulid();
+      newAuditRecord = auditor.createBranchFrom<RecordType>(record.id, anchorUlid);
+    } else if (existingAudit != null) {
+      // Pass oldRecord directly as the diff baseline. oldRecord is the current in-memory state
+      // (which already has all pending audit ops applied). Calling createRecordFrom(audit, oldRecord)
+      // would re-apply those ops on top of oldRecord, producing wrong deltas (e.g. duplicate tags).
+      newAuditRecord = auditor.updateAuditWith(
+        record,
+        existingAudit,
+        oldRecord ?? undefined,
+        this.#logger,
+      );
+    } else {
+      newAuditRecord = auditor.createAuditFrom(record);
+    }
+    this.#auditRecords.set(record.id, newAuditRecord);
+
+    void this.#persist([record], [newAuditRecord]);
+    this.#invokeOnChange({ type: 'upsert', records: [record], auditAction });
+  }
+
+  // ─── Collapse audit ───────────────────────────────────────────────────────
+
+  @bind
+  public async collapseAudit(recordId: string, anchorUlid: string): Promise<void> {
+    await this.#loadingPromise;
+    const existingAudit = this.#auditRecords.get(recordId);
+    if (existingAudit == null) return;
+    const newAudit = auditor.collapseToAnchor(existingAudit, anchorUlid);
+    this.#auditRecords.set(recordId, newAudit);
+    this.#logger?.silly('collapsed audit', { recordId, anchorUlid, existingAudit, newAudit });
+    this.#persistAudits([newAudit]);
+  }
+
+  // ─── Delete ───────────────────────────────────────────────────────────────
+
+  public async delete(id: string, config?: DeleteConfig): Promise<boolean>;
+  public async delete(ids: string[], config?: DeleteConfig): Promise<boolean>;
+  public async delete(record: RecordType, config?: DeleteConfig): Promise<boolean>;
+  public async delete(records: RecordType[], config?: DeleteConfig): Promise<boolean>;
+  @bind
+  public async delete(idsOrRecords: string | string[] | RecordType | RecordType[], config?: DeleteConfig): Promise<boolean> {
+    await this.#loadingPromise;
+    if (!Array.isArray(idsOrRecords)) return this.delete([idsOrRecords].removeNull() as any, config);
     if (idsOrRecords.length === 0) return false;
-    const { auditAction = 'default', keepIfHasHistory = false } = config ?? {};
-    const idsToDelete = idsOrRecords.mapWithoutNull(idOrRecord => {
-      const id = is.not.blank(idOrRecord) ? idOrRecord : idOrRecord.id;
+    const { auditAction = 'default' } = config ?? {};
+    const idsToDelete: string[] = [];
+    const tombstoneIds: string[] = [];
+    for (const idOrRecord of idsOrRecords) {
+      const id = is.not.blank(idOrRecord) ? idOrRecord as string : (idOrRecord as RecordType).id;
       const record = this.#records.get(id);
-      if (record == null) return;
+      if (record == null) {
+        // Record not in local cache. If using default audit action, create a tombstone so
+        // the delete can be propagated to the server via the next sync cycle.
+        if (auditAction === 'default' && !this.#auditRecords.has(id)) {
+          const branch = auditor.createBranchFrom<RecordType>(id, auditor.generateUlid());
+          const tombstone = auditor.delete(branch) as AuditOf<RecordType>;
+          this.#auditRecords.set(id, tombstone);
+          void this.#persistAudits([tombstone]);
+          tombstoneIds.push(id);
+        }
+        continue;
+      }
       this.#records.delete(id);
-      if (this.#isAudited === false) return id;
       const auditRecord = this.#auditRecords.get(id);
-      if (auditRecord == null) return id;
-      const deletedAuditRecord = auditor.delete(auditRecord, userId);
+      if (auditRecord == null) {
+        idsToDelete.push(id);
+        continue;
+      }
       if (auditAction === 'default') {
-        this.#auditRecords.set(id, deletedAuditRecord);
+        const deletedAudit = auditor.delete(auditRecord);
+        this.#auditRecords.set(id, deletedAudit);
+        void this.#persistAudits([deletedAudit]);
       } else if (auditAction === 'remove') {
         this.#auditRecords.delete(id);
       }
-      return id;
-    });
-    if (idsToDelete.length === 0) return false;
-    await this.#delete(idsToDelete, auditAction === 'remove' ? 'remove' : 'markAsDeleted');
-    this.#invokeOnChange({ type: 'remove', ids: idsToDelete, auditAction: auditAction === 'remove' ? 'remove' : 'markAsDeleted' });
+      idsToDelete.push(id);
+    }
+    if (idsToDelete.length === 0 && tombstoneIds.length === 0) return false;
+    if (idsToDelete.length > 0) {
+      void this.#deleteRecords(idsToDelete, auditAction === 'remove');
+      this.#invokeOnChange({ type: 'remove', ids: idsToDelete, auditAction: auditAction === 'remove' ? 'remove' : 'markAsDeleted' });
+    }
+    if (tombstoneIds.length > 0) {
+      // Notify listeners (e.g. ClientToServerProvider) so they can send an immediate remove to the server.
+      this.#invokeOnChange({ type: 'remove', ids: tombstoneIds, auditAction: 'markAsDeleted' });
+    }
     return true;
   }
+
+  // ─── Query (SQL-backed) ───────────────────────────────────────────────────
 
   @bind
   public async query({ filters, pagination, sorts }: DataRequest<RecordType>): Promise<QueryResults<RecordType>> {
     await this.#loadingPromise;
-    let records = await this.getAll();
-    const mongoFilters = this.#parseFilters(filters);
-    if (mongoFilters != null) records = records.filter(sift(mongoFilters));
-    if (sorts) records = DataSorts.applyTo(records, sorts);
-    const total = records.length;
+
+    const { where, params } = filtersToSql<RecordType>(filters);
+    const orderBy = sortsToSql<RecordType>(sorts);
+    const liveTable = `${this.#name}${LIVE_TABLE_SUFFIX}`;
+
+    // Count total (no pagination)
+    const countSql = `SELECT COUNT(*) as cnt FROM ${liveTable}${where ? ` WHERE ${where}` : ''}`;
+    const countRows = await this.#worker.query<{ cnt: number; }>(countSql, params);
+    const total = countRows[0]?.cnt ?? 0;
+
+    // Fetch page
+    let dataSql = `SELECT data FROM ${liveTable}${where ? ` WHERE ${where}` : ''}`;
+    if (orderBy) dataSql += ` ORDER BY ${orderBy}`;
+    const dataParams: unknown[] = [...params];
     if (pagination) {
-      const start = pagination.offset ?? 0;
-      const end = start + pagination.limit;
-      records = records.slice(start, end);
+      dataSql += ' LIMIT ? OFFSET ?';
+      dataParams.push(pagination.limit, pagination.offset ?? 0);
     }
+
+    const rows = await this.#worker.query<{ data: string; }>(dataSql, dataParams);
+    const records = rows.map(row => deserialise(JSON.parse(row.data)) as RecordType);
+
     return { records, total };
   }
 
   @bind
   public async distinct<Key extends keyof RecordType>({ field, filters, sorts }: DistinctProps<RecordType, Key>): Promise<DistinctResults<RecordType, Key>> {
     await this.#loadingPromise;
-    const { records } = await this.query({ filters, sorts });
-    return records.distinct(record => record[field]).map(record => record[field]);
+
+    const { where, params } = filtersToSql<RecordType>(filters);
+    const orderBy = sortsToSql<RecordType>(sorts);
+    const liveTable = `${this.#name}${LIVE_TABLE_SUFFIX}`;
+    const fieldExpr = `json_extract(data, '$.${String(field)}')`;
+
+    let sql = `SELECT DISTINCT ${fieldExpr} as v FROM ${liveTable}${where ? ` WHERE ${where}` : ''}`;
+    if (orderBy) sql += ` ORDER BY ${orderBy}`;
+
+    const rows = await this.#worker.query<{ v: unknown; }>(sql, params);
+    return rows.map(r => r.v) as DistinctResults<RecordType, Key>;
   }
+
+  // ─── Clear ────────────────────────────────────────────────────────────────
 
   @bind
   public async clear(auditAction: 'preserveWithHistory' | 'all' = 'preserveWithHistory'): Promise<void> {
     await this.#loadingPromise;
-    if (this.#isAudited && auditAction === 'preserveWithHistory') {
-      const recordIdsToClear = this.#auditRecords.toValuesArray().mapWithoutNull(auditRecord => !auditor.hasHistory(auditRecord) ? auditRecord.id : undefined);
+    if (auditAction === 'preserveWithHistory') {
+      const recordIdsToClear = this.#auditRecords.toValuesArray().mapWithoutNull(
+        auditRecord => !auditor.hasPendingChanges(auditRecord) ? auditRecord.id : undefined
+      );
       recordIdsToClear.forEach(id => {
         this.#records.delete(id);
         this.#auditRecords.delete(id);
       });
-      this.#delete(recordIdsToClear, 'remove');
+      void this.#deleteRecords(recordIdsToClear, true);
       this.#invokeOnChange({ type: 'clear', ids: recordIdsToClear });
+      return;
     }
     const ids = Array.from(this.#records.keys());
     this.#records.clear();
-    if (this.#isAudited) this.#auditRecords.clear();
-    this.#clear();
+    this.#auditRecords.clear();
+    void this.#clearAll();
     this.#invokeOnChange({ type: 'clear', ids });
   }
+
+  // ─── Misc ─────────────────────────────────────────────────────────────────
 
   @bind
   public async count(): Promise<number> {
@@ -175,43 +302,15 @@ export class DbCollection<RecordType extends Record = Record> {
   }
 
   @bind
-  public async getAllAudits(request: 'all' | 'withHistory' = 'all'): Promise<AuditOf<RecordType>[]> {
+  public async getAllAudits(): Promise<AuditOf<RecordType>[]> {
     await this.#loadingPromise;
-    if (this.#isAudited === false) return [];
-    if (request === 'all') return this.#auditRecords.toValuesArray();
-    return this.#auditRecords.toValuesArray().filter(auditRecord => auditor.hasHistory(auditRecord));
+    return this.#auditRecords.toValuesArray();
   }
 
-  public async resetAuditsOn(id: string): Promise<void>;
-  public async resetAuditsOn(ids: string[]): Promise<void>;
-  public async resetAuditsOn(record: RecordType): Promise<void>;
-  public async resetAuditsOn(records: RecordType[]): Promise<void>;
-  public async resetAuditsOn(auditRecord: AuditOf<RecordType>): Promise<void>;
-  public async resetAuditsOn(auditRecords: AuditOf<RecordType>[]): Promise<void>;
   @bind
-  public async resetAuditsOn(arg: string | string[] | RecordType | RecordType[] | AuditOf<RecordType> | AuditOf<RecordType>[]): Promise<void> {
+  public async hasPendingAudits(): Promise<boolean> {
     await this.#loadingPromise;
-    if (this.#isAudited === false) return;
-    const values = (!Array.isArray(arg) ? [arg] : arg).removeNull();
-    if (values.length === 0) return;
-    // existing audit records
-    const newAuditRecords = values.mapWithoutNull(value => {
-      const id = is.string(value) ? value : value.id;
-      const record = this.#records.get(id);
-      if (record == null) return;
-      const newAuditRecord = auditor.createBranchFrom(record);
-      this.#auditRecords.set(id, newAuditRecord);
-      return newAuditRecord;
-    });
-    if (newAuditRecords.length > 0) this.#upsertAudits(newAuditRecords);
-    // removed audit records
-    const removedAuditRecords = values.mapWithoutNull(value => {
-      const id = is.string(value) ? value : value.id;
-      const auditRecord = this.#auditRecords.get(id);
-      if (!auditRecord || !auditor.isDeleted(auditRecord)) return;
-      return auditRecord.id;
-    });
-    if (removedAuditRecords.length > 0) this.#delete(removedAuditRecords, 'remove');
+    return Array.from(this.#auditRecords.values()).some(a => auditor.hasPendingChanges(a));
   }
 
   @bind
@@ -220,71 +319,103 @@ export class DbCollection<RecordType extends Record = Record> {
     return () => this.#callbacks.delete(callback);
   }
 
+  /**
+   * Called by Db when another tab writes to this collection (§4.9 cross-tab reactivity).
+   * Reloads the in-memory cache from SQLite and emits a 'reload' event to subscribers.
+   */
+  @bind
+  public async reloadFromWorker(): Promise<void> {
+    await this.#loadingPromise;
+    await this.#loadData();
+    this.#invokeOnChange({ type: 'reload', records: Array.from(this.#records.values()) });
+  }
+
+  // ─── Private: change notification ────────────────────────────────────────
+
   #invokeOnChange(event: MXDBCollectionEvent<RecordType>) {
     this.#callbacks.forEach(callback => callback(event));
   }
 
-  async #loadRecordsFromDb<T extends Record>(collectionName: string): Promise<Map<string, T>> {
-    const db = await this.#db;
-    const transaction = db.transaction(collectionName, 'readonly');
-    const store = transaction.objectStore(collectionName);
-    const records = await utils.wrap(store.getAll());
-    transaction.abort();
-    return new Map(records.map(record => [record.id, deserialise(record)]));
-  }
+  // ─── Private: load from SQLite on startup ────────────────────────────────
 
   async #loadData() {
-    this.#records = await this.#loadRecordsFromDb(this.#name);
-    if (this.#isAudited === true) {
-      this.#auditRecords = await this.#loadRecordsFromDb(`${this.#name}${SYNC_COLLECTION_SUFFIX}`);
+    const liveTable = `${this.#name}${LIVE_TABLE_SUFFIX}`;
+
+    // Load live records
+    const liveRows = await this.#worker.query<LiveRow>(`SELECT id, data FROM ${liveTable}`);
+    this.#records = new Map(liveRows.map(row => [row.id, deserialise(JSON.parse(row.data)) as RecordType]));
+
+    const auditTable = `${this.#name}${AUDIT_TABLE_SUFFIX}`;
+    const auditRows = await this.#worker.query<AuditRow>(`SELECT id, recordId, type, timestamp, record, ops FROM ${auditTable} ORDER BY recordId, id`);
+    const grouped = new Map<string, AuditRow[]>();
+    for (const row of auditRows) {
+      if (!grouped.has(row.recordId)) grouped.set(row.recordId, []);
+      grouped.get(row.recordId)!.push(row);
+    }
+    this.#auditRecords = new Map(
+      Array.from(grouped.entries()).map(([recordId, rows]) => [recordId, rowsToAuditOf<RecordType>(recordId, rows)])
+    );
+  }
+
+  // ─── Private: fire-and-forget SQLite writes ───────────────────────────────
+
+  async #persist(records: RecordType[], auditRecords: AuditOf<RecordType>[]): Promise<void> {
+    const liveStmts = records.map(record => ({
+      sql: `INSERT OR REPLACE INTO ${this.#name}${LIVE_TABLE_SUFFIX}(id, data) VALUES (?, ?)`,
+      params: [record.id, JSON.stringify(serialise(record))],
+    }));
+    const auditStmts = auditRecords.flatMap(audit => this.#auditToInsertStatements(audit));
+
+    if (liveStmts.length > 0 || auditStmts.length > 0) {
+      await this.#worker.execBatch([...liveStmts, ...auditStmts], this.#name);
     }
   }
 
-  async #upsert(records: RecordType[], auditRecords: AuditOf<RecordType>[]) {
-    const db = await this.#db;
-    utils.upsertRecordUsingWebWorker(db.name, this.#name, records);
-    if (auditRecords.length > 0) utils.upsertRecordUsingWebWorker(db.name, `${this.#name}${SYNC_COLLECTION_SUFFIX}`, auditRecords);
+  async #persistAudits(auditRecords: AuditOf<RecordType>[]): Promise<void> {
+    if (auditRecords.length === 0) return;
+    const stmts = auditRecords.flatMap(audit => this.#auditToInsertStatements(audit));
+    if (stmts.length > 0) await this.#worker.execBatch(stmts, this.#name);
   }
 
-  async #delete(ids: string[], auditAction: 'markAsDeleted' | 'remove' = 'markAsDeleted') {
-    const db = await this.#db;
-    utils.deleteRecordUsingWebWorker(db.name, this.#name, ids);
-    if (this.#isAudited === true) {
-      if (auditAction === 'markAsDeleted') {
-        const auditRecords = ids.mapWithoutNull(id => this.#auditRecords.get(id));
-        utils.upsertRecordUsingWebWorker(db.name, `${this.#name}${SYNC_COLLECTION_SUFFIX}`, auditRecords);
-      } else if (auditAction === 'remove') {
-        utils.deleteRecordUsingWebWorker(db.name, `${this.#name}${SYNC_COLLECTION_SUFFIX}`, ids);
-      }
-    }
-  }
-
-  async #clear() {
-    const db = await this.#db;
-    utils.clearRecordUsingWebWorker(db.name, this.#name);
-    utils.clearRecordUsingWebWorker(db.name, `${this.#name}${SYNC_COLLECTION_SUFFIX}`);
-  }
-
-  async #upsertAudits(auditRecords: AuditOf<RecordType>[]) {
-    const db = await this.#db;
-    utils.upsertRecordUsingWebWorker(db.name, `${this.#name}${SYNC_COLLECTION_SUFFIX}`, auditRecords);
-  }
-
-  #parseFilters(filters: DataFilters<RecordType> | undefined): Filter<RecordType> | undefined {
-    if (filters == null) return;
-    const clonedFilters = Object.clone(filters) as Filter<RecordType>;
-    const parse = (target: unknown) => {
-      if (!is.plainObject(target)) return;
-      Object.entries(target).forEach(([key, value]) => {
-        if (value === undefined) {
-          Reflect.deleteProperty(target, key);
-        } else {
-          parse(value);
-        }
+  /** Convert AuditOf → DELETE old rows + INSERT each audit entry row (transactional). */
+  #auditToInsertStatements(audit: AuditOf<RecordType>): Array<{ sql: string; params: unknown[]; }> {
+    const auditTable = `${this.#name}${AUDIT_TABLE_SUFFIX}`;
+    const stmts: Array<{ sql: string; params: unknown[]; }> = [
+      { sql: `DELETE FROM ${auditTable} WHERE recordId = ?`, params: [audit.id] },
+    ];
+    this.#logger?.silly('Writing audit entries to SQL Lite', { audit });
+    for (const row of entriesToRows(audit.id, audit.entries)) {
+      stmts.push({
+        sql: `INSERT INTO ${auditTable}(id, recordId, type, timestamp, record, ops) VALUES (?, ?, ?, ?, ?, ?)`,
+        params: [row.id, row.recordId, row.type, row.timestamp, row.record, row.ops],
       });
-    };
-    parse(clonedFilters);
-    return clonedFilters;
+    }
+    return stmts;
   }
 
+  async #deleteRecords(ids: string[], removeAudit = false): Promise<void> {
+    if (ids.length === 0) return;
+    const placeholders = ids.map(() => '?').join(', ');
+    const liveTable = `${this.#name}${LIVE_TABLE_SUFFIX}`;
+    const stmts: Array<{ sql: string; params: unknown[]; }> = [
+      { sql: `DELETE FROM ${liveTable} WHERE id IN (${placeholders})`, params: ids },
+    ];
+    if (removeAudit) {
+      stmts.push({
+        sql: `DELETE FROM ${this.#name}${AUDIT_TABLE_SUFFIX} WHERE recordId IN (${placeholders})`,
+        params: ids,
+      });
+    } else {
+      const auditRecords = ids.mapWithoutNull(id => this.#auditRecords.get(id));
+      stmts.push(...auditRecords.flatMap(audit => this.#auditToInsertStatements(audit)));
+    }
+    await this.#worker.execBatch(stmts, this.#name);
+  }
+
+  async #clearAll(): Promise<void> {
+    await this.#worker.execBatch([
+      { sql: `DELETE FROM ${this.#name}${LIVE_TABLE_SUFFIX}` },
+      { sql: `DELETE FROM ${this.#name}${AUDIT_TABLE_SUFFIX}` },
+    ], this.#name);
+  }
 }

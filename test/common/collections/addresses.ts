@@ -32,6 +32,5 @@ export const officeAddress: AddressRecord = {
 export const addresses = defineCollection<AddressRecord>({
   name: 'addresses',
   indexes: [],
-  version: 1,
 });
 

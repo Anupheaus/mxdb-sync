@@ -1,18 +1,31 @@
-import type { DataFilters, DataResponse, Logger, AuditOf } from '@anupheaus/common';
-import { auditor, bind, DataSorts, InternalError, is, type Record } from '@anupheaus/common';
+import type { DataFilters, DataResponse, Logger } from '@anupheaus/common';
+import { bind, DataSorts, InternalError, is, type Record } from '@anupheaus/common';
 import type { MXDBCollectionConfig, MXDBCollectionIndex } from '../../../common';
 import { configRegistry, type MongoDocOf, type MXDBCollection, type QueryProps, type DistinctProps } from '../../../common';
-import type { Collection, Db, Filter, IndexDescriptionInfo, Sort, SortDirection, WithId } from 'mongodb';
+import type { ClientSession, Collection, Db, IndexDescriptionInfo, Sort, SortDirection, WithId } from 'mongodb';
 import { dbUtils } from './db-utils';
 import { useSocketAPI } from '@anupheaus/socket-api/server';
 import { DateTime } from 'luxon';
+import { auditor } from '../../../common';
+import type { AnyAuditOf, ServerAuditOf } from '../../../common';
+import { toServerAuditOf } from '../../audit/toServerAuditOf';
 
 const slowFilterParseThreshold = 1000;
 const slowQueryThreshold = 3000;
 
+// §6.9#14 — Transient failure retry config (per-record)
+const SYNC_RETRY_DELAY_MS = 5_000;
+const SYNC_MAX_RETRIES = 20;
+
+export interface SyncWriteResult {
+  id: string;
+  /** §6.9#15 — Set when write permanently failed after all retries. */
+  error?: string;
+}
+
 interface DbCollectionSyncProps<RecordType extends Record> {
   updated: RecordType[];
-  updatedAudits: AuditOf<RecordType>[];
+  updatedAudits: AnyAuditOf<RecordType>[];
   removedIds: string[];
 }
 
@@ -20,8 +33,10 @@ interface UpsertProps {
   resetAudit?: boolean;
 }
 
-interface DeleteProps {
+interface DeleteProps<RT extends Record = Record> {
   clearAudit?: boolean;
+  /** When removing without clearing audit, supply live rows to persist on delete entries (see {@link ServerDbCollection.remove}). */
+  deleteSnapshots?: { [recordId: string]: RT };
 }
 
 interface Props<RecordType extends Record> {
@@ -62,21 +77,22 @@ export class ServerDbCollection<RecordType extends Record = Record> {
     return isArray ? docs : docs[0];
   }
 
-  public async getAudit(id: string): Promise<AuditOf<RecordType> | undefined>;
-  public async getAudit(ids: string[]): Promise<AuditOf<RecordType>[]>;
+  public async getAudit(id: string): Promise<ServerAuditOf<RecordType> | undefined>;
+  public async getAudit(ids: string[]): Promise<ServerAuditOf<RecordType>[]>;
   @bind
-  public async getAudit(ids: string | string[]): Promise<AuditOf<RecordType> | AuditOf<RecordType>[] | undefined> {
+  public async getAudit(ids: string | string[]): Promise<ServerAuditOf<RecordType> | ServerAuditOf<RecordType>[] | undefined> {
     const collection = await this.#getAuditCollection();
     const isArray = Array.isArray(ids);
     const justIds = (isArray ? ids : [ids]) as any[];
-    const docs = (await collection.find({ _id: { $in: justIds } }).toArray()).mapWithoutNull(dbUtils.deserialize);
+    const docs = (await collection.find({ _id: { $in: justIds } }).toArray()).mapWithoutNull(dbUtils.deserialize) as ServerAuditOf<RecordType>[];
     return isArray ? docs : docs[0];
   }
 
   @bind
-  public async find(query: Filter<MongoDocOf<RecordType>>): Promise<RecordType | undefined> {
+  public async find(filters: DataFilters<RecordType>): Promise<RecordType | undefined> {
     const collection = await this.#getCollection();
-    const doc = await collection.findOne(query);
+    const mongoFilters = this.#parseFilters(filters);
+    const doc = await collection.findOne(mongoFilters ?? {});
     if (doc == null) return;
     return dbUtils.deserialize(doc);
   }
@@ -89,30 +105,25 @@ export class ServerDbCollection<RecordType extends Record = Record> {
       const startTime = performance.now();
       const rawDocs = await collection.find().sort({ $natural: 1 }).toArray();
       const endTime = performance.now();
-      if (endTime - startTime >= slowQueryThreshold) this.#logger.warn(`Slow query found for full request of "${collection.collectionName}"`, { duration: endTime - startTime });
+      if (endTime - startTime >= slowQueryThreshold) this.#logger.warn(`Slow query on "${collection.collectionName}"`, { duration: endTime - startTime });
       const data = rawDocs.mapWithoutNull(dbUtils.deserialize);
       return { data, total: data.length };
     } else {
-      let filters: Filter<MongoDocOf<RecordType>> | undefined;
-      let offset: number | undefined;
-      let limit: number | undefined;
-
-      if (request.filters != null && Object.keys(request.filters).length > 0) {
+      const filters = request.filters != null && Object.keys(request.filters).length > 0 ? (() => {
         const startTime = performance.now();
-        filters = this.#parseFilters(request.filters);
+        const result = this.#parseFilters(request!.filters);
         const endTime = performance.now();
-        if (endTime - startTime >= slowFilterParseThreshold) this.#logger.warn(`Slow filter parsing found for "${collection.collectionName}"`, { request, duration: endTime - startTime });
-      }
-      if (request.pagination != null) {
-        offset = request.pagination.offset ?? 0;
-        limit = request.pagination.limit;
-      }
+        if (endTime - startTime >= slowFilterParseThreshold) this.#logger.warn(`Slow filter parse on "${collection.collectionName}"`, { duration: endTime - startTime });
+        return result;
+      })() : undefined;
+
+      const offset = request.pagination?.offset ?? undefined;
+      const limit = request.pagination?.limit;
       const sort = this.#parseSorts(request.sorts);
-      this.#logger.debug('Querying database', { filters, sort, offset, limit });
       const startTime = performance.now();
       const rawDocs = await collection.find(filters ?? {}, { sort, skip: offset, limit }).sort({ $natural: 1 }).toArray();
       const endTime = performance.now();
-      if (endTime - startTime >= slowQueryThreshold) this.#logger.warn(`Slow query found for "${collection.collectionName}"`, { request, duration: endTime - startTime });
+      if (endTime - startTime >= slowQueryThreshold) this.#logger.warn(`Slow query on "${collection.collectionName}"`, { duration: endTime - startTime });
       const data = rawDocs.mapWithoutNull(dbUtils.deserialize);
       let total = data.length;
       if (request.getAccurateTotal === true) total = await collection.countDocuments(filters);
@@ -129,41 +140,38 @@ export class ServerDbCollection<RecordType extends Record = Record> {
   public async upsert(record: RecordType, props?: UpsertProps): Promise<void>;
   public async upsert(records: RecordType[], props?: UpsertProps): Promise<void>;
   @bind
-  public async upsert(records: RecordType | RecordType[], { resetAudit = false, }: UpsertProps = {}): Promise<void> {
+  public async upsert(records: RecordType | RecordType[], { resetAudit = false }: UpsertProps = {}): Promise<void> {
     const collection = await this.#getCollection();
     records = Array.isArray(records) ? records : [records];
     if (records.length === 0) return;
     const existingRecords = await this.get(records.ids());
     const result = await collection.bulkWrite(records.map(record => ({ replaceOne: { replacement: dbUtils.serialize(record), filter: { _id: record.id as any }, upsert: true } })));
     if (!result.isOk()) throw new InternalError('Bulk write failed - result is not as expected');
-    const upsertedRecordCount = result.matchedCount + result.upsertedCount;
-    const recordCount = records.length;
-    if (upsertedRecordCount !== recordCount) throw new InternalError(`Upsert failed - count of upserted records (${upsertedRecordCount}) does not match the count of records to upsert (${recordCount})`);
+    const upsertedCount = result.matchedCount + result.upsertedCount;
+    if (upsertedCount !== records.length) throw new InternalError(`Upsert failed - expected ${records.length}, got ${upsertedCount}`);
     if (this.#config.disableAudit !== true) {
-      // Do not block the request on audit maintenance, but also never allow an audit failure
-      // to become an unhandled rejection (which can take down the process).
-      void this.#upsertAudit(existingRecords, records, { resetAudit }).catch(error => {
-        this.#logger.error('Audit upsert failed', {
-          error: String((error as any)?.message ?? error),
-          stack: (error as any)?.stack,
-        });
+      void this.#upsertAudit(existingRecords, records, { resetAudit }).catch(err => {
+        this.#logger.error('Audit upsert failed', { error: String((err as any)?.message ?? err) });
       });
     }
   }
 
-  public async delete(id: string, props?: DeleteProps): Promise<void>;
-  public async delete(ids: string[], props?: DeleteProps): Promise<void>;
+  public async remove(id: string, props?: DeleteProps<RecordType>): Promise<void>;
+  public async remove(ids: string[], props?: DeleteProps<RecordType>): Promise<void>;
   @bind
-  public async delete(ids: string | string[], { clearAudit = false }: DeleteProps = {}): Promise<void> {
+  public async remove(ids: string | string[], { clearAudit = false, deleteSnapshots: passedSnapshots }: DeleteProps<RecordType> = {}): Promise<void> {
     const collection = await this.#getCollection();
     ids = Array.isArray(ids) ? ids : [ids];
+
+    let deleteSnapshots: { [recordId: string]: RecordType } | undefined = passedSnapshots;
+    if (this.#config.disableAudit !== true && !clearAudit && deleteSnapshots == null) {
+      const fetched = await this.get(ids);
+      deleteSnapshots = Object.fromEntries(fetched.map(r => [r.id, r] as const));
+    }
+
     const result = await collection.deleteMany({ _id: { $in: ids as any[] } });
-    if (!result.acknowledged) throw new InternalError('Delete failed - result is not as expected');
-    const deletedRecordCount = result.deletedCount;
-    const recordCount = ids.length;
-    if (deletedRecordCount !== recordCount)
-      throw new InternalError(`Delete failed in "${this.#collection.name}" - count of deleted records (${deletedRecordCount}) does not match the count of records to delete (${recordCount})`);
-    if (this.#config.disableAudit !== true) this.#deleteAudit(ids, { clearAudit });
+    if (!result.acknowledged) throw new InternalError('Delete failed');
+    if (this.#config.disableAudit !== true) this.#deleteAudit(ids, { clearAudit, deleteSnapshots });
   }
 
   @bind
@@ -171,15 +179,12 @@ export class ServerDbCollection<RecordType extends Record = Record> {
     const collection = await this.#getCollection();
     const mongoFilters = this.#parseFilters(filters);
     const mongoSorts = this.#parseSorts(sorts);
-    const records = await collection.aggregate<WithId<MongoDocOf<RecordType>>>([mongoFilters == null ? undefined : {
-      $match: mongoFilters
-    }, {
-      $group: { doc: { $first: '$$ROOT' }, _id: `$${field.toString()}` },
-    }, {
-      $replaceRoot: { newRoot: '$doc' },
-    }, mongoSorts == null ? undefined : {
-      $sort: mongoSorts,
-    }].removeNull()).toArray();
+    const records = await collection.aggregate<WithId<MongoDocOf<RecordType>>>([
+      mongoFilters == null ? undefined : { $match: mongoFilters },
+      { $group: { doc: { $first: '$$ROOT' }, _id: `$${field.toString()}` } },
+      { $replaceRoot: { newRoot: '$doc' } },
+      mongoSorts == null ? undefined : { $sort: mongoSorts },
+    ].removeNull()).toArray();
     return records.mapWithoutNull(dbUtils.deserialize);
   }
 
@@ -196,21 +201,122 @@ export class ServerDbCollection<RecordType extends Record = Record> {
     if (this.#config.disableAudit !== true) this.#clearAudit();
   }
 
-  public async sync({ updated, updatedAudits, removedIds }: DbCollectionSyncProps<RecordType>) {
-    const collection = await this.#getCollection();
-    await this.#writeRecords(updated);
-    await this.#writeAuditRecords(updatedAudits);
-    const result = await collection.deleteMany({ _id: { $in: removedIds as any[] } });
-    if (!result.acknowledged) throw new InternalError('Sync failed - unable to delete records requested');
-    // we do not check the count of deleted records as it is possible that some of the records have already been deleted    
+  /**
+   * §4.2 / §6.9#14 / §6.9#15 — Per-record transactional writes with per-record retry.
+   *
+   * Each record (upsert or delete) is written in its own MongoDB transaction so a
+   * permanent failure on one record does not abort the others (§6.9 scenario 15).
+   * Transient failures are retried up to SYNC_MAX_RETRIES times (§6.9 scenario 14).
+   *
+   * Returns a result per id — `error` is set for permanently failed records.
+   */
+  public async sync({ updated, updatedAudits, removedIds }: DbCollectionSyncProps<RecordType>): Promise<SyncWriteResult[]> {
+    const db = await this.#getDb();
+    const results: SyncWriteResult[] = [];
+
+    // Per-record upserts
+    for (const record of updated) {
+      const recordSyncT0 = performance.now();
+      const audit = updatedAudits.find(a => a.id === record.id);
+      const session = db.client.startSession();
+      try {
+        await this.#withRecordRetry(record.id, async () => {
+          await session.withTransaction(async () => {
+            await this.#writeRecords([record], session);
+            if (audit) await this.#writeAuditRecords([audit], session);
+          });
+        });
+        const recordSyncMs = Math.round(performance.now() - recordSyncT0);
+        this.#logger.debug('liveCollection:sync write committed (Mongo transaction)', {
+          collection: this.#collection.name,
+          recordId: record.id,
+          updatedAt: (record as { updatedAt?: number }).updatedAt,
+          durationMs: recordSyncMs,
+        });
+        if (recordSyncMs >= 2_000) {
+          this.#logger.warn(`liveCollection:sync slow upsert on "${this.#collection.name}"`, {
+            recordId: record.id,
+            durationMs: recordSyncMs,
+          });
+        }
+        results.push({ id: record.id });
+      } catch (err) {
+        this.#logger.error(`§6.9#15 Permanent write failure for "${record.id}" in "${this.#collection.name}"`, {
+          recordId: record.id,
+          error: err instanceof Error ? err.message : String(err),
+        });
+        results.push({ id: record.id, error: err instanceof Error ? err.message : String(err) });
+      } finally {
+        await session.endSession();
+      }
+    }
+
+    // Per-record deletes
+    const liveCollection = await this.#getCollection();
+    for (const id of removedIds) {
+      const deleteSyncT0 = performance.now();
+      const audit = updatedAudits.find(a => a.id === id);
+      const session = db.client.startSession();
+      try {
+        await this.#withRecordRetry(id, async () => {
+          await session.withTransaction(async () => {
+            const doc = await liveCollection.findOne({ _id: id as any }, { session });
+            const live = doc == null ? undefined : (dbUtils.deserialize(doc) as RecordType);
+            await liveCollection.deleteOne({ _id: id as any }, { session });
+            if (audit) {
+              await this.#writeAuditRecords([audit], session, {
+                deleteSnapshots: live != null ? { [id]: live } : undefined,
+              });
+            }
+          });
+        });
+        const deleteSyncMs = Math.round(performance.now() - deleteSyncT0);
+        this.#logger.debug('liveCollection:sync delete committed (Mongo transaction)', {
+          collection: this.#collection.name,
+          recordId: id,
+          durationMs: deleteSyncMs,
+        });
+        if (deleteSyncMs >= 2_000) {
+          this.#logger.warn(`liveCollection:sync slow delete on "${this.#collection.name}"`, {
+            recordId: id,
+            durationMs: deleteSyncMs,
+          });
+        }
+        results.push({ id });
+      } catch (err) {
+        this.#logger.error(`§6.9#15 Permanent delete failure for "${id}" in "${this.#collection.name}"`, {
+          recordId: id,
+          error: err instanceof Error ? err.message : String(err),
+        });
+        results.push({ id, error: err instanceof Error ? err.message : String(err) });
+      } finally {
+        await session.endSession();
+      }
+    }
+
+    return results;
   }
 
-  #parseFilters(filters: DataFilters<RecordType> | undefined): Filter<MongoDocOf<RecordType>> | undefined {
-    if (filters == null) return;
-    const clonedFilters = Object.clone(filters) as Filter<MongoDocOf<RecordType>>;
+  /** §6.9#14 — Retry a per-record write for transient I/O failures. */
+  async #withRecordRetry(recordId: string, fn: () => Promise<void>): Promise<void> {
+    for (let attempt = 1; ; attempt++) {
+      try {
+        await fn();
+        return;
+      } catch (err) {
+        if (attempt >= SYNC_MAX_RETRIES) throw err;
+        this.#logger.warn(`§6.9#14 Transient write failure for "${recordId}" (attempt ${attempt}/${SYNC_MAX_RETRIES}), retrying in ${SYNC_RETRY_DELAY_MS}ms`, { err });
+        await new Promise<void>(resolve => setTimeout(resolve, SYNC_RETRY_DELAY_MS));
+      }
+    }
+  }
+
+  #parseFilters(filters: DataFilters<RecordType> | undefined) {
+    if (filters == null) return undefined;
+    const clonedFilters = Object.clone(filters) as any;
     const parse = (target: unknown) => {
       if (!is.plainObject(target)) return;
-      Object.entries(target).forEach(([key, value]) => {
+      Object.entries(target as object).forEach(([key, value]) => {
         if (key === 'id') {
           Reflect.deleteProperty(target, 'id');
           Reflect.set(target, '_id', value);
@@ -228,8 +334,9 @@ export class ServerDbCollection<RecordType extends Record = Record> {
   #parseSorts(sorts: DataSorts<RecordType> | undefined): Sort | undefined {
     const strictSorts = DataSorts.toArray(sorts);
     if (strictSorts.length === 0) return;
-    if (strictSorts.length === 0) strictSorts.push(['id', 'asc']);
-    return strictSorts.map(([field, direction]): [string, SortDirection] => [field === 'id' ? '_id' : field as string, direction]);
+    return strictSorts.map(([field, direction]): [string, SortDirection] =>
+      [field === 'id' ? '_id' : field as string, direction]
+    );
   }
 
   async #getCollectionByName<R extends Record = RecordType>(name: string) {
@@ -245,85 +352,122 @@ export class ServerDbCollection<RecordType extends Record = Record> {
   }
 
   async #getAuditCollection() {
-    return this.#getCollectionByName<AuditOf<RecordType>>(`${this.#collection.name}_sync`);
+    return this.#getCollectionByName<ServerAuditOf<RecordType>>(`${this.#collection.name}_sync`);
+  }
+
+  /** Collects auditor warnings/errors into `sink` for corruption detection. Debug/info/silly are no-ops. */
+  #auditLoggerThatCaptures(sink: string[]): Logger {
+    const add = (msg: string) => {
+      sink.push(msg);
+    };
+    const noop = () => { /* debug/info/silly are not corruption signals */ };
+    const nest = (): Logger =>
+      ({
+        warn: add,
+        info: noop,
+        debug: noop,
+        error: add,
+        silly: noop,
+        createSubLogger: nest,
+      }) as unknown as Logger;
+    return nest();
+  }
+
+  /** Maps auditor diagnostics to structured error logs for a record. */
+  #auditLoggerAsStructuredError(recordId: string, label: string): Logger {
+    const emit = (msg: string) => {
+      this.#logger.error(label, { recordId, msg });
+    };
+    const nest = (): Logger =>
+      ({
+        warn: emit,
+        info: emit,
+        debug: emit,
+        error: emit,
+        silly: () => {},
+        createSubLogger: nest,
+      }) as unknown as Logger;
+    return nest();
+  }
+
+  /** Forwards auditor warn/error/debug/info to the collection logger (replay, isAudit, merge diagnostics). */
+  #auditLoggerForwarding(recordId: string): Logger {
+    const emit = (level: 'warn' | 'error' | 'debug' | 'info') => (msg: string) => {
+      this.#logger[level]('auditor', { recordId, msg });
+    };
+    const nest = (): Logger =>
+      ({
+        warn: emit('warn'),
+        error: emit('error'),
+        debug: emit('debug'),
+        info: emit('info'),
+        silly: () => {},
+        createSubLogger: nest,
+      }) as unknown as Logger;
+    return nest();
   }
 
   async #upsertAudit(existingRecords: RecordType[], records: RecordType[], { resetAudit = false }: UpsertProps = {}) {
-    const { getUser } = useSocketAPI();
-    const user = getUser();
-    const userId = user?.id ?? Math.emptyId();
     const recordIds = records.ids();
     const existingAuditRecords = await this.#getAuditRecords(recordIds);
     const newAuditRecords = records.mapWithoutNull(record => {
-      if (resetAudit) return auditor.createAuditFrom(record, userId);
+      if (resetAudit) return auditor.createAuditFrom(record);
 
-      let existingAuditRecord = existingAuditRecords.findById(record.id);
+      let existingAuditRecord: AnyAuditOf<RecordType> | undefined = existingAuditRecords.findById(record.id);
       const existingRecord = existingRecords.findById(record.id);
 
       if (existingRecord != null && existingAuditRecord != null) {
-        // Capture exact replay failures (diff op + path) without crashing.
-        const auditErrors: Error[] = [];
-        const existingRecordFromAudit = auditor.createRecordFrom(existingAuditRecord, undefined, e => auditErrors.push(e));
+        const auditErrors: string[] = [];
+        const existingRecordFromAudit = auditor.createRecordFrom(
+          existingAuditRecord,
+          existingRecord ?? undefined,
+          this.#auditLoggerThatCaptures(auditErrors),
+        );
 
         if (auditErrors.length > 0) {
-          const err = auditErrors[0] as any;
-          const meta = err?.meta ?? err?.cause?.meta;
-          this.#logger.error('Corrupt/unreplayable audit detected', {
-            collectionName: this.#collection.name,
+          this.#logger.warn('Audit replay had issues — resetting audit from current record', {
             recordId: record.id,
-            auditId: existingAuditRecord.id,
-            error: String(err?.message ?? err),
-            // best-effort: include auditor InternalError meta (operation + underlying error)
-            meta,
-            historyLength: existingAuditRecord.history.length,
-            historyTail: existingAuditRecord.history.slice(-5),
+            errors: auditErrors.slice(0, 3),
           });
-          // For now: do NOT mutate the audit. Keep it as-is for investigation.
-          // Also: avoid throwing here so the server doesn't fall over.
-          return;
-        }
-
-        if (!is.deepEqual(existingRecordFromAudit, existingRecord)) {
-          // DB record diverged from what audit says; reconcile audit with DB (should not throw)
-          existingAuditRecord = auditor.updateAuditWith(existingRecord, existingAuditRecord, Math.emptyId(), e => {
-            this.#logger.error('Audit reconcile failed', {
-              collectionName: this.#collection.name,
-              recordId: record.id,
-              auditId: existingAuditRecord!.id,
-              error: String((e as any)?.message ?? e),
-              meta: (e as any)?.meta,
-            });
-          });
+          // Instead of skipping the audit entirely, reset to a fresh audit based
+          // on the current record so subsequent updates can be tracked correctly.
+          existingAuditRecord = auditor.createAuditFrom(existingRecord);
+        } else if (!is.deepEqual(existingRecordFromAudit, existingRecord)) {
+          existingAuditRecord = auditor.updateAuditWith(
+            existingRecord,
+            existingAuditRecord,
+            existingRecordFromAudit ?? undefined,
+            this.#auditLoggerAsStructuredError(record.id, 'Audit reconcile failed'),
+          );
         }
 
         if (is.deepEqual(existingRecord, record)) return;
       }
 
-      if (existingAuditRecord == null) return auditor.createAuditFrom(record, userId);
-      return auditor.updateAuditWith(record, existingAuditRecord, userId, e => {
-        this.#logger.error('Audit update failed', {
-          collectionName: this.#collection.name,
-          recordId: record.id,
-          auditId: existingAuditRecord!.id,
-          error: String((e as any)?.message ?? e),
-          meta: (e as any)?.meta,
-        });
-      });
+      if (existingAuditRecord == null) return auditor.createAuditFrom(record);
+      const currentRecord = auditor.createRecordFrom(
+        existingAuditRecord,
+        existingRecords.findById(record.id) ?? undefined,
+        this.#auditLoggerForwarding(record.id),
+      );
+      return auditor.updateAuditWith(
+        record,
+        existingAuditRecord,
+        currentRecord ?? undefined,
+        this.#auditLoggerAsStructuredError(record.id, 'Audit update failed'),
+      );
     });
     await this.#writeAuditRecords(newAuditRecords);
   }
 
-  async #deleteAudit(ids: string[], { clearAudit = false }: DeleteProps = {}) {
-    const { getUser } = useSocketAPI();
-    const user = getUser();
-    const userId = user?.id ?? Math.emptyId();
+  async #deleteAudit(ids: string[], { clearAudit = false, deleteSnapshots }: DeleteProps<RecordType> = {}) {
     const existingAuditRecords = await this.#getAuditRecords(ids);
     if (clearAudit) {
       const collection = await this.#getAuditCollection();
       await collection.deleteMany({ _id: { $in: ids } });
     } else {
-      const newAuditRecords = existingAuditRecords.map(auditRecord => auditor.delete(auditRecord, userId));
-      await this.#writeAuditRecords(newAuditRecords);
+      const newAuditRecords = existingAuditRecords.map(auditRecord => auditor.delete(auditRecord));
+      await this.#writeAuditRecords(newAuditRecords, undefined, { deleteSnapshots });
     }
   }
 
@@ -336,7 +480,7 @@ export class ServerDbCollection<RecordType extends Record = Record> {
     const indexNames = indexes.map(index => index.name);
     return async (existingIndex: IndexDescriptionInfo) => {
       const indexName = existingIndex.name;
-      if (indexName == null || indexName === '_id_') return; // do not drop the _id index
+      if (indexName == null || indexName === '_id_') return;
       if (indexNames.includes(indexName)) return;
       await collection.dropIndex(indexName);
     };
@@ -357,8 +501,8 @@ export class ServerDbCollection<RecordType extends Record = Record> {
   async #enableChangeStreamPreAndPostImages(db: Db, collection: Collection<any>) {
     try {
       await db.command({ collMod: collection.collectionName, changeStreamPreAndPostImages: { enabled: true } });
-    } catch (error) {
-      throw new InternalError(`Unable to update the change stream pre and post images settings for the "${collection.collectionName}" collection, please make sure that the user is set to an Atlas Admin user.`);
+    } catch {
+      throw new InternalError(`Unable to update change stream settings for "${collection.collectionName}" — ensure the user has Atlas Admin privileges.`);
     }
   }
 
@@ -382,22 +526,55 @@ export class ServerDbCollection<RecordType extends Record = Record> {
 
   async #getAuditRecords(ids: string[]) {
     const collection = await this.#getAuditCollection();
-    return (await collection.find({ _id: { $in: ids } }).toArray()).mapWithoutNull(dbUtils.deserialize);
+    return (await collection.find({ _id: { $in: ids } }).toArray()).mapWithoutNull(dbUtils.deserialize) as ServerAuditOf<RecordType>[];
   }
 
-  async #writeRecords(records: RecordType[]) {
+  #getActingUserId(): string {
+    try {
+      const id = useSocketAPI().getUser()?.id;
+      if (id != null && String(id).length > 0) return String(id);
+    } catch {
+      // No socket context (e.g. background job)
+    }
+    return '__mxdb_system__';
+  }
+
+  async #writeRecords(records: RecordType[], session?: ClientSession) {
     if (records.length === 0) return;
     const collection = await this.#getCollection();
-    await collection.bulkWrite(records.map(record => ({ replaceOne: { replacement: dbUtils.serialize(record), filter: { _id: record.id as any }, upsert: true } })));
+    await collection.bulkWrite(
+      records.map(record => ({ replaceOne: { replacement: dbUtils.serialize(record), filter: { _id: record.id as any }, upsert: true } })),
+      session ? { session } : undefined,
+    );
   }
 
-  async #writeAuditRecords(records: AuditOf<RecordType>[]) {
+  async #writeAuditRecords(
+    records: AnyAuditOf<RecordType>[],
+    session?: ClientSession,
+    writeOpts?: { deleteSnapshots?: { [recordId: string]: RecordType | undefined } },
+  ) {
     if (records.length === 0) return;
     const collection = await this.#getAuditCollection();
+    const actingUserId = this.#getActingUserId();
+    const serverAudits = records.map(a =>
+      toServerAuditOf(a, actingUserId, {
+        deleteSnapshots: writeOpts?.deleteSnapshots,
+        logger: this.#logger,
+      }),
+    );
     try {
-      await collection.bulkWrite(records.map(record => ({ replaceOne: { replacement: dbUtils.serialize(record), filter: { _id: record.id as any }, upsert: true } })));
+      await collection.bulkWrite(
+        serverAudits.map(serverAudit => ({
+          replaceOne: {
+            replacement: dbUtils.serialize(serverAudit as unknown as RecordType) as MongoDocOf<ServerAuditOf<RecordType>>,
+            filter: { _id: serverAudit.id as any },
+            upsert: true,
+          },
+        })),
+        session ? { session } : undefined,
+      );
     } catch (error) {
-      throw new InternalError({ error, message: `Failed to write audit records into the "${this.#collection.name}" collection.` });
+      throw new InternalError({ error, message: `Failed to write audit records for "${this.#collection.name}".` });
     }
   }
 
@@ -409,5 +586,4 @@ export class ServerDbCollection<RecordType extends Record = Record> {
     if (request.getAccurateTotal === true) return request;
     return;
   }
-
 }

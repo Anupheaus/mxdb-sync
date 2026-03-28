@@ -1,3 +1,4 @@
+import type { Logger } from '@anupheaus/common';
 import type { MXDBCollectionConfig } from '../../../common/models';
 import { Db } from './Db';
 import '@anupheaus/common';
@@ -10,8 +11,13 @@ class Dbs {
 
   #dbs: Map<string, Db>;
 
-  public open(name: string, collections: MXDBCollectionConfig[]) {
-    return this.#dbs.getOrSet(name, () => new Db(name, collections));
+  public open(
+    name: string,
+    collections: MXDBCollectionConfig[],
+    encryptionKey?: Uint8Array,
+    logger?: Logger,
+  ) {
+    return this.#dbs.getOrSet(name, () => new Db(name, collections, encryptionKey, logger));
   }
 
   public async close(name: string) {

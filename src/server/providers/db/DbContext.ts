@@ -1,14 +1,24 @@
-// import type { Db } from 'mongodb';
-// import type { MXDBCollection, MXDBSyncedCollectionWatchUpdate } from '../../../common';
-// import type { Record } from '@anupheaus/common';
-
-import { AsyncLocalStorage } from 'async_hooks';
+import { createAsyncContext, required } from '@anupheaus/socket-api/server';
 import type { ServerDb } from './ServerDb';
+import type { ServerToClientSynchronisation } from '../../ServerToClientSynchronisation';
 
-// export interface DbContextProps {
-//   db: Db;
-//   onWatch<RecordType extends Record = Record>(watchId: string, collection: MXDBCollection<RecordType>, callback: (update: MXDBSyncedCollectionWatchUpdate<RecordType>) => void): void;
-//   removeWatch(watchId: string): void;
-// }
+const ctx = createAsyncContext({
+  db: required<ServerDb>(),
+  serverToClientSync: required<ServerToClientSynchronisation>(),
+});
 
-export const DbProvider = new AsyncLocalStorage<ServerDb>();
+export const setDb = ctx.setDb;
+export const useDb = ctx.useDb;
+export const setServerToClientSync = ctx.setServerToClientSync;
+
+const useServerToClientSyncContext = ctx.useServerToClientSync;
+
+/** Full per-connection synchronisation instance (seed mirror, change stream, close, etc.). */
+export function useServerToClientSynchronisation(): ServerToClientSynchronisation {
+  return useServerToClientSyncContext();
+}
+
+/** Destructure `pushRecordsToClient` for fan-out; implementation is bound on the class instance. */
+export function useServerToClientSync(): Pick<ServerToClientSynchronisation, 'pushRecordsToClient'> {
+  return { pushRecordsToClient: useServerToClientSyncContext().pushRecordsToClient };
+}

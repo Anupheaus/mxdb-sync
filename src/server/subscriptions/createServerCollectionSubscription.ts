@@ -1,12 +1,17 @@
 import type { SocketAPISubscription } from '@anupheaus/socket-api/common';
 import { createServerSubscription } from '@anupheaus/socket-api/server';
-import type { SocketAPIServerSubscriptionHandler } from '../../../../socket-api/src/server/subscriptions/createServerSubscription';
 import { InternalError, type PromiseMaybe } from '@anupheaus/common';
 import { useClient } from '../hooks';
+import { clearSubscriptionDataKeys } from '../subscriptionDataStore';
 
-type SocketAPIServerSubscriptionHandlerParameters<Request, Response> = Parameters<SocketAPIServerSubscriptionHandler<Request, Response>>[0];
+interface SocketSubscriptionBaseParams<Request, Response> {
+  request: Request;
+  subscriptionId: string;
+  update(response: Response): void | Promise<void>;
+  onUnsubscribe(handler: () => void): void;
+}
 
-interface MXDBSyncServerSubscriptionHandlerParameters<Request, Response, AdditionalData = unknown> extends SocketAPIServerSubscriptionHandlerParameters<Request, Response> {
+interface MXDBSyncServerSubscriptionHandlerParameters<Request, Response, AdditionalData = unknown> extends SocketSubscriptionBaseParams<Request, Response> {
   previousResponse: Response | undefined;
   additionalData: AdditionalData | undefined;
   updateAdditionalData(data: AdditionalData): void;
@@ -29,11 +34,17 @@ export function createServerCollectionSubscription<AdditionalData = unknown>() {
         const previousResponse = getData<Response | undefined>(`subscription-data.${subscriptionId}`);
         const wrappedUpdate = (response: Response) => {
           saveAsPreviousResponse(response);
-          update(response);
+          void update(response);
+        };
+        const wrappedOnUnsubscribe = (fn: () => void) => {
+          onUnsubscribe(() => {
+            clearSubscriptionDataKeys(subscriptionId);
+            fn();
+          });
         };
         const result = await handler({
           previousResponse, request, subscriptionId,
-          additionalData, updateAdditionalData, update: wrappedUpdate, onUnsubscribe,
+          additionalData, updateAdditionalData, update: wrappedUpdate, onUnsubscribe: wrappedOnUnsubscribe,
         });
         saveAsPreviousResponse(result);
         return result;

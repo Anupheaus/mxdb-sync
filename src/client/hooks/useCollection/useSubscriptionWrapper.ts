@@ -1,11 +1,11 @@
 import { is, type AnyObject, type Logger, type PromiseMaybe, type Record } from '@anupheaus/common';
-import { useSync, type DbCollection } from '../../providers';
+import type { DbCollection } from '../../providers';
 import { useAction, useSocketAPI } from '@anupheaus/socket-api/client';
 import type { UseSubscription } from './createUseSubscription';
 import type { SocketAPIAction, SocketAPISubscription } from '@anupheaus/socket-api/common';
 import { useLayoutEffect, useRef } from 'react';
 import { DateTime } from 'luxon';
-import type { AddDebugTo, AddDisableTo } from '../../../common/internalModels';
+import type { AddDebugTo, AddDisableTo } from '../../../common/models';
 import { ACTION_TIMEOUT_MS, withTimeout } from '../../utils/actionTimeout';
 
 const RequestCancelled = Symbol('RequestCancelled');
@@ -39,7 +39,6 @@ export function useSubscriptionWrapper<RecordType extends Record, Request extend
   onRequestTransform,
   onExecute,
 }: Props<RecordType, Request, Response, RemoteRequest, RemoteResponse>) {
-  const { finishSyncing } = useSync();
   const { getIsConnected } = useSocketAPI();
   const { execute: remoteInvoke } = useSubscription(subscription);
   const actionResult = useAction(action);
@@ -55,7 +54,6 @@ export function useSubscriptionWrapper<RecordType extends Record, Request extend
   async function invoke(props: AddDebugTo<AddDisableTo<Request>>, onResponse: (result: Response) => void): Promise<void>;
   async function invoke(props: AddDebugTo<AddDisableTo<Request>>): Promise<Response>;
   async function invoke(props: AddDebugTo<AddDisableTo<Request>>, onResponse?: (result: Response) => void, onSameResponse?: () => void): Promise<void | Response> {
-    await finishSyncing();
     const { disable, debug, ...rest } = props;
     const request = rest as Request;
     const isActionRequired = !is.function(onResponse);

@@ -3,11 +3,12 @@ import type { Record } from '@anupheaus/common';
 import { useSyncState } from '@anupheaus/react-ui';
 import type { DbCollection } from '../../providers';
 import type { Get } from './createGet';
+import type { MXDBError } from '../../../common';
 
 interface State<RecordType extends Record> {
   record?: RecordType;
   isLoading: boolean;
-  error?: Error;
+  error?: MXDBError;
 }
 
 export function createUseGet<RecordType extends Record>(collection: DbCollection<RecordType>, get: Get<RecordType>) {
@@ -46,6 +47,7 @@ export function createUseGet<RecordType extends Record>(collection: DbCollection
         switch (event.type) {
           case 'upsert': {
             const record = event.records.findById(id);
+            if (record == null) return;
             setState({ record, isLoading: false, error: undefined });
             break;
           }

@@ -3,19 +3,20 @@ import type { Record } from '@anupheaus/common';
 import type { Query } from './createQuery';
 import { useSyncState } from '@anupheaus/react-ui';
 import type { QueryProps } from '../../../common';
-import type { AddDebugTo, AddDisableTo } from '../../../common/internalModels';
+import type { MXDBError } from '../../../common';
+import type { AddDebugTo, AddDisableTo } from '../../../common/models';
 
 export function createUseQuery<RecordType extends Record>(query: Query<RecordType>) {
 
   return (props: AddDebugTo<AddDisableTo<QueryProps<RecordType>>> = {}) => {
-    const { setState, getState } = useSyncState(() => ({ records: [] as RecordType[], total: 0, isLoading: true }));
+    const { setState, getState } = useSyncState(() => ({ records: [] as RecordType[], total: 0, isLoading: true, error: undefined as MXDBError | undefined }));
     const lastResponseRef = useRef<Partial<ReturnType<typeof getState>>>();
     const requestIdRef = useRef('');
 
     useMemo(() => {
       if (props.disable) {
         if (props.debug) console.log('[MXDB-Sync] Query is disabled, returning default', props); // eslint-disable-line no-console
-        setState({ records: [], total: 0, isLoading: false });
+        setState({ records: [], total: 0, isLoading: false, error: undefined });
       } else {
         setState(s => ({ ...s, isLoading: true }));
         const requestId = requestIdRef.current = Math.uniqueId();
@@ -24,7 +25,7 @@ export function createUseQuery<RecordType extends Record>(query: Query<RecordTyp
           if (props.debug) console.log('[MXDB-Sync] Received query response', { requestId, records, total }); // eslint-disable-line no-console
           if (requestId !== requestIdRef.current) return;
           lastResponseRef.current = { records, total }; // store the last response to be used when the query is disabled and then the same props are passed again, the onSameResponse callback will be called
-          setState({ records, total, isLoading: false });
+          setState({ records, total, isLoading: false, error: undefined });
         }, () => setState(s => ({ ...s, ...lastResponseRef.current, isLoading: false })));
       }
     }, [Object.hash(props)]);

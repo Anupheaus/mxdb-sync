@@ -4,6 +4,22 @@
 
 - **Read**: `c:/code/personal/agents/global-agent.md`
 
+## Documentation
+
+All of this ships in the published package under **`docs/`** (see **`package.json` → `files`**). Start from the index, then drill into guides vs reference vs plans.
+
+- **Index (table of contents):** [docs/README.md](docs/README.md)
+- **Guides**
+  - [docs/guides/client-guide.md](docs/guides/client-guide.md) — React app: `MXDBSync`, `useCollection`, auth, sync UX
+  - [docs/guides/server-guide.md](docs/guides/server-guide.md) — `startServer`, MongoDB, extensions, auth
+- **Reference**
+  - [docs/reference/tech-overview.md](docs/reference/tech-overview.md) — architecture and sync flows (Mermaid)
+  - [docs/reference/features.md](docs/reference/features.md) — exports, socket actions / events / subscriptions
+- **Plans / target specs:** [docs/plans/](docs/plans/) — C2S/S2C specs, client record creation, [docs/plans/design.md](docs/plans/design.md) (master design)
+- **Archive:** [docs/archive/](docs/archive/) — older trackers (see [docs/archive/README.md](docs/archive/README.md))
+
+**Root [README.md](README.md)** — quick start, exports, and links back to **`docs/README.md`**.
+
 ## Architecture Summary
 
 MXDB-Sync is a real-time synchronization library for MongoDB-backed collections between clients and servers. It provides a three-layer architecture:

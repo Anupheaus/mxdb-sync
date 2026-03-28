@@ -1,5 +1,6 @@
 import { createComponent } from '@anupheaus/react-ui';
-import { useAction, useCollection } from '../../src/client';
+import { useCollection } from '../../src/client';
+import { useAction } from '@anupheaus/socket-api/client';
 import { addresses, testAction } from '../common';
 
 interface Props {

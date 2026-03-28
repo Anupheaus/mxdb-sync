@@ -13,7 +13,7 @@ vi.mock('./seededData', () => ({
   saveSeededData: (data: Record<string, string>) => mockSaveSeededData(data),
 }));
 vi.mock('../collections', () => ({ useCollection: (c: unknown) => mockUseCollection(c) }));
-vi.mock('@anupheaus/common', async (importOriginal) => {
+vi.mock('@anupheaus/common', async importOriginal => {
   const actual = await importOriginal() as object;
   return {
     ...actual,
@@ -22,7 +22,17 @@ vi.mock('@anupheaus/common', async (importOriginal) => {
 });
 
 describe('seedCollections', () => {
-  const mockLogger = { info: vi.fn(), debug: vi.fn(), silly: vi.fn(), createSubLogger: vi.fn(() => mockLogger) };
+  const mockInfo = vi.fn();
+  const mockDebug = vi.fn();
+  const mockSilly = vi.fn();
+  const mockCreateSubLogger = vi.fn();
+  const mockLogger = {
+    info: mockInfo,
+    debug: mockDebug,
+    silly: mockSilly,
+    createSubLogger: mockCreateSubLogger,
+  };
+  mockCreateSubLogger.mockReturnValue(mockLogger);
 
   beforeEach(() => {
     vi.clearAllMocks();
@@ -31,7 +41,7 @@ describe('seedCollections', () => {
   });
 
   it('loads and saves seeded data', async () => {
-    const collection = defineCollection({ name: 'items', version: 1, indexes: [] });
+    const collection = defineCollection({ name: 'items', indexes: [] });
     extendCollection(collection, { onSeed: async () => {} });
     mockUseCollection.mockReturnValue({ getAll: vi.fn().mockResolvedValue([]), upsert: vi.fn(), remove: vi.fn() });
 
@@ -42,13 +52,13 @@ describe('seedCollections', () => {
   });
 
   it('skips collections without onSeed', async () => {
-    const collection = defineCollection({ name: 'items', version: 1, indexes: [] });
+    const collection = defineCollection({ name: 'items', indexes: [] });
     await seedCollections([collection]);
     expect(mockUseCollection).not.toHaveBeenCalled();
   });
 
   it('calls onSeed with seedWith when extension has onSeed', async () => {
-    const collection = defineCollection({ name: 'items', version: 1, indexes: [] });
+    const collection = defineCollection({ name: 'items', indexes: [] });
     const onSeed = vi.fn();
     extendCollection(collection, { onSeed });
     const getAll = vi.fn().mockResolvedValue([]);

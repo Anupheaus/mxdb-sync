@@ -1,16 +1,15 @@
-import { useContext, useMemo, useRef, useState } from 'react';
-import { SyncContextBusy } from './providers/sync/SyncContexts';
+import { useMemo, useRef, useState } from 'react';
 import { useSocketAPI } from '@anupheaus/socket-api/client';
-import { PromiseState } from '@anupheaus/common';
+import { useSyncState } from './providers/client-to-server/SyncStateContext';
 
 export function useMXDBSync() {
   const { getIsConnected, onConnectionStateChanged, getSocket, testDisconnect, testReconnect } = useSocketAPI();
   const [isConnected, setIsConnected] = useState(useMemo(() => getIsConnected(), []));
-  const { isValid, getSyncPromise, onSyncChanged } = useContext(SyncContextBusy);
+  const { isSyncing, onSyncStateChanged } = useSyncState();
   const updateWhenChangedRef = useRef(false);
   const [clientId, setClientId] = useState(() => getIsConnected() ? getSocket()?.id : undefined);
-  const [isSyncing, setIsSyncing] = useState(() => isValid && getSyncPromise().state === PromiseState.Pending);
   const updateWhenSyncChangedRef = useRef(false);
+  const [isSyncingState, setIsSyncingState] = useState(isSyncing);
 
   onConnectionStateChanged((newIsConnected, socket) => {
     if (!updateWhenChangedRef.current) return;
@@ -18,19 +17,17 @@ export function useMXDBSync() {
     setIsConnected(newIsConnected);
   });
 
-  onSyncChanged(newIsSyncing => {
-    if (!updateWhenSyncChangedRef.current) return;
-    setIsSyncing(newIsSyncing);
-  });
-
-
-
   return {
-    get isSynchronising() { updateWhenSyncChangedRef.current = true; return isSyncing; },
+    get isSynchronising() {
+      if (!updateWhenSyncChangedRef.current) {
+        updateWhenSyncChangedRef.current = true;
+        onSyncStateChanged(setIsSyncingState);
+      }
+      return isSyncingState;
+    },
     get isConnected() { updateWhenChangedRef.current = true; return isConnected; },
     get clientId() { updateWhenChangedRef.current = true; return clientId; },
     onConnectionStateChanged,
-    onSyncChanged,
     testDisconnect,
     testReconnect,
   };

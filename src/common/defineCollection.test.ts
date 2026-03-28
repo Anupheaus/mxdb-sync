@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import { defineCollection } from './defineCollection';
 import { configRegistry } from './registries';
-import type { MXDBCollectionConfig, MXDBCollection } from './models';
+import type { MXDBCollectionConfig } from './models';
 import type { Record } from '@anupheaus/common';
 
 describe('defineCollection', () => {
@@ -12,7 +12,6 @@ describe('defineCollection', () => {
 
   const baseConfig: MXDBCollectionConfig<TestRecord> = {
     name: 'test-collection',
-    version: 1,
     indexes: [{ name: 'by_name', fields: ['name'] }],
   };
 
@@ -33,19 +32,18 @@ describe('defineCollection', () => {
     const config = configRegistry.get(collection);
     expect(config).toBeDefined();
     expect(config!.name).toBe(baseConfig.name);
-    expect(config!.version).toBe(baseConfig.version);
     expect(config!.indexes).toEqual(baseConfig.indexes);
   });
 
-  it('allows disableSync and disableAudit in config', () => {
+  it('allows syncMode and disableAudit in config', () => {
     const collection = defineCollection<TestRecord>({
       ...baseConfig,
-      name: 'no-sync',
-      disableSync: true,
+      name: 'no-client',
+      syncMode: 'ServerOnly',
       disableAudit: true,
     });
     const config = configRegistry.get(collection);
-    expect(config!.disableSync).toBe(true);
+    expect(config!.syncMode).toBe('ServerOnly');
     expect(config!.disableAudit).toBe(true);
   });
 });

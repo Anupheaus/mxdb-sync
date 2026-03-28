@@ -7,7 +7,8 @@ const ws = require('ws');
 
 module.exports = class HotReloadPlugin {
   constructor(config) {
-    this.#config = { port: 3090, ...config };
+    const envPort = Number(process.env.HOT_RELOAD_PORT);
+    this.#config = { port: Number.isFinite(envPort) && envPort > 0 ? envPort : 3090, ...config };
     this.#clearLog();
     this.#clients = new Set();
     this.#startListener();
@@ -37,9 +38,9 @@ module.exports = class HotReloadPlugin {
   async #startListener() {
     try {
 
-      const { port } = this.#config;
+      const basePort = this.#config.port;
       // const certsPath = path.resolve(__dirname, './certs/server').replace(/\\/g, '/');
-      this.#log('Starting listener', { port });
+      this.#log('Starting listener', { port: basePort });
       // const serverCert = new Cert(certsPath);
       // this.#log('Loading SSL certificate...', { certsPath });
       // await serverCert.load();
@@ -50,9 +51,38 @@ module.exports = class HotReloadPlugin {
         // ca: serverCert.caCert,
         rejectUnauthorized: false,
         requestCert: false,
-      }).listen(port);
+      });
+
+      const listen = (port) => new Promise((resolve, reject) => {
+        const onError = (err) => {
+          server.off('listening', onListening);
+          reject(err);
+        };
+        const onListening = () => {
+          server.off('error', onError);
+          resolve();
+        };
+        server.once('error', onError);
+        server.once('listening', onListening);
+        server.listen(port);
+      });
+
+      let chosenPort = basePort;
+      for (let p = basePort; p < basePort + 25; p++) {
+        try {
+          // eslint-disable-next-line no-await-in-loop
+          await listen(p);
+          chosenPort = p;
+          break;
+        } catch (err) {
+          if (err?.code === 'EADDRINUSE') continue;
+          throw err;
+        }
+      }
+
+      this.#config.port = chosenPort;
       this.#log('Server started, starting websocket...');
-      this.#socket = new ws.Server({ secure: true, host: 'localhost', path: '/', server });
+      this.#socket = new ws.Server({ host: 'localhost', path: '/', server });
       this.#log('Websocket started, adding event handlers...');
       this.#socket.on('connection', client => {
         this.#log('Client connected');

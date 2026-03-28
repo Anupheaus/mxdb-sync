@@ -37,7 +37,7 @@ export function getIntegrityReport(
       missingIds.push(id);
     } else {
       serverById.delete(id);
-      if (recordsEqual(expected, actual)) {
+      if (syncTestRecordsEqual(expected, actual)) {
         matchedCount += 1;
       } else {
         valueMismatches.push({ id, expected, actual });
@@ -64,7 +64,7 @@ export function getIntegrityReport(
 }
 
 /**
- * Compare server records with expected state (last-write-wins from records of truth).
+ * Compare server records with expected state (see `recordsOfTruth.getExpectedState()`).
  * Logs diffs and throws if any mismatch.
  */
 export function assertIntegrity(
@@ -96,12 +96,13 @@ export function assertIntegrity(
   }
 }
 
-function recordsEqual(a: SyncTestRecord, b: SyncTestRecord): boolean {
+/** Exported for sync-test harnesses (replay oracle, truth maps). */
+export function syncTestRecordsEqual(a: SyncTestRecord, b: SyncTestRecord): boolean {
   if (a.id !== b.id || a.clientId !== b.clientId || a.updatedAt !== b.updatedAt) return false;
   if ((a.name !== undefined || b.name !== undefined) && a.name !== b.name) return false;
   if ((a.value !== undefined || b.value !== undefined) && a.value !== b.value) return false;
   if (!nestedEqual(a.metadata, b.metadata)) return false;
-  if (!arrayEqual(a.tags, b.tags)) return false;
+  if (!arrayEqual(a.tags ?? undefined, b.tags ?? undefined)) return false;
   return true;
 }
 

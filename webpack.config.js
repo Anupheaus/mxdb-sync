@@ -102,6 +102,7 @@ module.exports = (env, argv) => {
     resolve: {
       ...clientSettings.resolve,
       fallback: {
+        crypto: false,
         path: false, // require.resolve('path-browserify'),
         os: false, //require.resolve('os-browserify/browser'),
         buffer: false, // require.resolve('buffer/'),
@@ -115,7 +116,13 @@ module.exports = (env, argv) => {
     },
     target: isDev ? 'web' : 'node',
     externals: isDev ? [] : [
-      nodeExternals(),
+      nodeExternals({
+        allowlist: isDev ? [
+          '@anupheaus/common',
+          '@anupheaus/react-ui',
+          /@anupheaus\/socket-api\/.*/,
+        ] : [],
+      }),
     ],
     plugins: [
       ...(clientSettings.plugins ?? []),
@@ -154,9 +161,16 @@ module.exports = (env, argv) => {
     entry: {
       server: isDev ? './test/server/start.ts' : './src/server/index.ts',
     },
+    externalsPresets: { node: true },
     target: 'node',
     externals: [
-      nodeExternals(),
+      nodeExternals({
+        allowlist: isDev ? [
+          '@anupheaus/common',
+          '@anupheaus/react-ui',
+          /@anupheaus\/socket-api\/.*/,
+        ] : [],
+      }),
     ],
     plugins: [
       ...(serverSettings.plugins ?? []),

@@ -5,9 +5,7 @@ import { getCollectionExtensions } from '../../collections/extendCollection';
 import { ServerDbCollection } from './ServerDbCollection';
 import { ServerDbCollectionEvents } from './ServerDbCollectionEvents';
 import type { ServerDbChangeEvent } from './server-db-models';
-import type { AnyFunction } from '@anupheaus/common';
 import { is, type Logger, type Record, type Unsubscribe } from '@anupheaus/common';
-import { DbProvider } from './DbContext';
 import { AsyncLocalStorage } from 'async_hooks';
 
 interface Props {
@@ -41,10 +39,17 @@ export class ServerDb {
   #dbEvents: Map<string, ServerDbCollectionEvents>;
   #changeCallbacks: Set<(event: ServerDbChangeEvent) => void>;
   #changeStreamDebounceMs: number | undefined;
+  /** Fibonacci backoff for connect retries (ms); capped at 60s. Reset after a successful connect. */
+  #connectBackoffMsPrev = 500;
+  #connectBackoffMsCurr = 500;
+  #connectAttempt = 0;
 
   public use<RecordType extends Record>(collectionName: string) {
     return this.#collections.get(collectionName) as ServerDbCollection<RecordType>;
   }
+
+  /** Expose the raw MongoDB Db for auth infrastructure (AuthCollection). */
+  public getMongoDb(): Promise<Db> { return this.#db; }
 
   public async clear() {
     const db = await this.#db;
@@ -61,25 +66,45 @@ export class ServerDb {
     return () => this.#changeCallbacks.delete(callbackWrapper);
   }
 
-  public wrap<F extends AnyFunction>(delegate: F): F {
-    return ((...args: any[]) => DbProvider.run(this, () => delegate(...args))) as F;
+  #resetConnectBackoff() {
+    this.#connectBackoffMsPrev = 500;
+    this.#connectBackoffMsCurr = 500;
+    this.#connectAttempt = 0;
+  }
+
+  /** Next wait before retry; advances Fibonacci state (capped at 60s). */
+  #nextConnectDelayMs(): number {
+    const capMs = 60_000;
+    const delayMs = Math.min(capMs, this.#connectBackoffMsCurr);
+    const nextCurr = Math.min(capMs, this.#connectBackoffMsPrev + this.#connectBackoffMsCurr);
+    this.#connectBackoffMsPrev = this.#connectBackoffMsCurr;
+    this.#connectBackoffMsCurr = nextCurr;
+    return delayMs;
   }
 
   #connect() {
     const attemptToConnect = async (): Promise<Db> => {
-      this.#logger.info(`Connecting to database "${this.#mongoDbName}"...`);
+      this.#connectAttempt += 1;
+      const attempt = this.#connectAttempt;
+      this.#logger.info(`Connecting to database "${this.#mongoDbName}" (attempt ${attempt})...`);
       try {
         await this.#client.connect();
         const db = this.#client.db(this.#mongoDbName);
+        this.#resetConnectBackoff();
+        this.#logger.info(`Connected to database "${this.#mongoDbName}" after ${attempt} attempt(s).`);
         this.#startWatching(db);
         return db;
       } catch (error) {
+        const delayMs = this.#nextConnectDelayMs();
         if (error instanceof Error) {
-          this.#logger.error('Failed to connect to database, could this be that this server\'s IP address is not configured on Atlas?');
+          this.#logger.error(
+            `Failed to connect to database (attempt ${attempt}), retrying in ${delayMs}ms — could this be that this server's IP address is not configured on Atlas?`,
+            { error: error.message, attempt, delayMs },
+          );
         } else {
-          this.#logger.error('Failed to connect to database', { error });
+          this.#logger.error(`Failed to connect to database (attempt ${attempt}), retrying in ${delayMs}ms`, { error, attempt, delayMs });
         }
-        await Promise.delay(10000);
+        await Promise.delay(delayMs);
         return attemptToConnect();
       }
     };
@@ -146,24 +171,57 @@ export class ServerDb {
     };
 
     try {
-      await this.wrap(() => Promise.resolve(run()))();
+      await Promise.resolve(run());
     } catch (error) {
       this.#logger.error('Extension onAfter hook failed', { collectionName: event.collectionName, type: event.type, error });
     }
+  }
+
+  #changeStreamDocumentId(change: ChangeStreamDocument<MongoDocOf<Record>>): string | undefined {
+    if ('documentKey' in change && change.documentKey != null && '_id' in change.documentKey) {
+      return String((change.documentKey as { _id: unknown })._id);
+    }
+    if ('fullDocument' in change && change.fullDocument != null && '_id' in change.fullDocument) {
+      return String((change.fullDocument as { _id: unknown })._id);
+    }
+    return undefined;
   }
 
   #startWatching(db: Db) {
     const changeStream = this.#changeStream = db.watch([{ $project: { something: false } }], { fullDocumentBeforeChange: 'whenAvailable' });
     changeStream.on('change', change => {
       const collectionName: string | undefined = 'ns' in change && change.ns != null && 'coll' in change.ns ? change.ns.coll : undefined;
-      if (is.blank(collectionName)) return;
+      const op = 'operationType' in change ? change.operationType : undefined;
+      const documentId = this.#changeStreamDocumentId(change as ChangeStreamDocument<MongoDocOf<Record>>);
+
+      if (is.blank(collectionName)) {
+        this.#logger.silly('changeStream:ignore (no collection ns)', { operationType: op, documentId });
+        return;
+      }
       const collection = this.#collections.get(collectionName);
-      if (collection == null) return;
+      if (collection == null) {
+        this.#logger.silly('changeStream:ignore (collection not in ServerDb config)', { collectionName, operationType: op, documentId });
+        return;
+      }
       // Ignore changes where the full document is the same as the full document before change
-      if ('fullDocument' in change && 'fullDocumentBeforeChange' in change && is.deepEqual(change.fullDocument, change.fullDocumentBeforeChange)) return;
+      if ('fullDocument' in change && 'fullDocumentBeforeChange' in change && is.deepEqual(change.fullDocument, change.fullDocumentBeforeChange)) {
+        this.#logger.silly('changeStream:ignore (fullDocument unchanged vs before)', { collectionName, operationType: op, documentId });
+        return;
+      }
       const validOperationType: ServerDbChangeEvent['type'] | undefined = ['create', 'insert'].includes(change.operationType)
         ? 'insert' : ['update', 'replace'].includes(change.operationType) ? 'update' : change.operationType === 'delete' ? 'delete' : undefined;
-      if (validOperationType == null) return;
+      if (validOperationType == null) {
+        this.#logger.silly('changeStream:ignore (operationType not mapped)', { collectionName, operationType: op, documentId });
+        return;
+      }
+
+      this.#logger.silly('changeStream:raw event → debounce batch', {
+        collectionName,
+        mappedType: validOperationType,
+        operationType: op,
+        documentId,
+      });
+
       const key = `${collectionName}-${validOperationType}`;
       const events = this.#dbEvents.getOrSet(key, () => new ServerDbCollectionEvents({
         collectionName,
@@ -171,6 +229,7 @@ export class ServerDb {
         operationType: validOperationType,
         debounceMs: this.#changeStreamDebounceMs,
         onAfterDispatch: event => this.#runExtensionHooksAfterChange(event),
+        logger: this.#logger,
       }));
       events.process(change as ChangeStreamDocument<MongoDocOf<Record>>);
     });

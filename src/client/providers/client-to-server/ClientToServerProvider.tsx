@@ -1,69 +1,58 @@
 import { createComponent, useOnUnmount, useSet } from '@anupheaus/react-ui';
 import { useDb } from '../dbs';
 import { useMemo } from 'react';
-import { useAction } from '@anupheaus/socket-api/client';
-import { mxdbRemoveAction, mxdbUpsertAction } from '../../../common';
+import { auditor } from '../../../common';
+import { hashRecord, contentHash } from '../../../common/auditor/hash';
+import { useClientToServerSyncInstance } from './useClientToServerSyncInstance';
 
-import { ACTION_TIMEOUT_MS, withTimeout } from '../../utils/actionTimeout';
-
+/**
+ * §3.1 — Replaces immediate mxdbUpsertAction / mxdbRemoveAction with enqueue on
+ * ClientToServerSynchronisation. Each local upsert/remove (non-branched) calls enqueue;
+ * the C2S class handles debounced batching and server delivery.
+ */
 export const ClientToServerProvider = createComponent('ClientToServerProvider', () => {
   const { db, collections } = useDb();
   const unsubscribeCallbacks = useSet<() => void>();
-  const { isConnected, mxdbUpsertAction: upsertAction } = useAction(mxdbUpsertAction);
-  const { mxdbRemoveAction: removeAction } = useAction(mxdbRemoveAction);
+  const c2s = useClientToServerSyncInstance();
 
   useMemo(() => {
+    if (c2s == null) return;
+
     collections.forEach(collection => {
       const dbCollection = db.use(collection.name);
 
       unsubscribeCallbacks.add(dbCollection.onChange(async event => {
-        if (!isConnected()) return;
         switch (event.type) {
-          case 'clear':
-            await withTimeout(
-              removeAction({ collectionName: collection.name, recordIds: event.ids, locallyOnly: true }),
-              ACTION_TIMEOUT_MS,
-              `mxdbRemoveAction(clear:${collection.name})`,
-            );
-            break;
-          case 'upsert':
+          case 'upsert': {
+            // §4.5 — Branched upserts do NOT enqueue (server-driven reconciliation)
             if (event.auditAction === 'branched') return;
-            try {
-              const expectedIds = event.records.ids();
-              const ackIds = await withTimeout(
-                upsertAction({ collectionName: collection.name, records: event.records }) as Promise<string[] | undefined>,
-                ACTION_TIMEOUT_MS,
-                `mxdbUpsertAction(${collection.name})`,
-              );
-              // Only reset audits if the server explicitly acknowledged the ids we sent.
-              // This prevents losing the only durable "intent" (audit history) when a disconnect/restart
-              // happens mid-flight and the request was not actually persisted server-side.
-              const ackSet = new Set((ackIds ?? []).removeNull());
-              const allAcked = expectedIds.every(id => ackSet.has(id));
-              if (allAcked) {
-                await dbCollection.resetAuditsOn(expectedIds);
-              }
-            } catch {
-              // If the request failed or timed out, keep audits intact so SyncProvider can replay via mxdbSyncCollectionsAction.
+
+            for (const record of event.records) {
+              const audit = await dbCollection.getAudit(record.id);
+              if (audit == null) continue;
+              const lastAuditEntryId = auditor.getLastEntryId(audit);
+              if (lastAuditEntryId == null) continue;
+              const recordHash = await hashRecord(record);
+              c2s.enqueue({ collectionName: collection.name, recordId: record.id, recordHash, lastAuditEntryId });
             }
             break;
-          case 'remove':
-            try {
-              const expectedIds = event.ids;
-              const ackIds = await withTimeout(
-                removeAction({ collectionName: collection.name, recordIds: expectedIds, locallyOnly: event.auditAction === 'remove' }) as Promise<string[] | undefined>,
-                ACTION_TIMEOUT_MS,
-                `mxdbRemoveAction(${collection.name})`,
-              );
-              const ackSet = new Set((ackIds ?? []).removeNull());
-              const allAcked = expectedIds.every(id => ackSet.has(id));
-              if (allAcked) {
-                await dbCollection.resetAuditsOn(expectedIds);
-              }
-            } catch {
-              // Keep audits; reconnect sync can reconcile removals.
+          }
+          case 'remove': {
+            // §4.5 — 'remove' auditAction means server-driven deletion, skip enqueue
+            if (event.auditAction === 'remove') return;
+
+            for (const id of event.ids) {
+              const audit = await dbCollection.getAudit(id);
+              if (audit == null) continue;
+              const lastAuditEntryId = auditor.getLastEntryId(audit);
+              if (lastAuditEntryId == null) continue;
+              // Deleted row → hash of null
+              const recordHash = contentHash(null);
+              c2s.enqueue({ collectionName: collection.name, recordId: id, recordHash, lastAuditEntryId });
             }
             break;
+          }
+          // 'clear' and 'reload' events are not client-originated mutations → no enqueue
         }
       }));
     });

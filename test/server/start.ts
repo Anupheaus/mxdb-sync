@@ -1,15 +1,17 @@
 
 import { config } from 'dotenv';
 config();
-import { Logger } from '@anupheaus/common';
+import { Error, Logger } from '@anupheaus/common';
 import { startServer } from '../../src/server';
 import http from 'http';
 import { configureViews } from './configureViews';
 import { configureStaticFiles } from './configureStaticFiles';
+import { configureAuth } from './configureAuth';
 import { collections } from '../common';
 import './configureExtensions';
 import { actions } from './configureActions';
 import { privateKey } from './private-key';
+import { waitForBindablePort } from './waitForBindablePort';
 
 const mongoDbName = process.env.MONGO_DB_NAME as string;
 const mongoDbUrl = process.env.MONGO_DB_URI as string;
@@ -27,24 +29,49 @@ Logger.registerListener({
 });
 
 const logger = new Logger('MXDB-Sync');
+const server = http.createServer();
 
 async function start() {
-  const server = http.createServer();
-  const { app } = await startServer({
-    name: 'mxdb-sync-test',
-    logger,
-    collections,
-    actions,
-    server,
-    mongoDbName,
-    mongoDbUrl,
-    privateKey,
-    clientLoggingService: () => loggerService,
-  });
-  configureStaticFiles(app);
-  configureViews(app);
-  logger.info(`Server listening on port ${port}...`);
-  server.listen(port);
+  try {
+    await waitForBindablePort(port, logger);
+    const { app, createInviteLink } = await startServer({
+      name: 'mxdb-sync-test',
+      logger,
+      collections,
+      actions,
+      server,
+      mongoDbName,
+      mongoDbUrl,
+      privateKey,
+      clientLoggingService: () => loggerService,
+      onGetUserDetails: async () => ({
+        name: 'Tony Hales',
+        displayName: 'Tony Hales',
+      }),
+    });
+    configureStaticFiles(app as any);
+    configureAuth(app as any, createInviteLink);
+    configureViews(app as any);
+    server.on('error', error => { logger.error(error); server.close(); });
+    server.listen(port, () => { logger.info(`Server listening on port ${port}...`); });
+  } catch (error) {
+    logger.error(new Error({ error }));
+    server.close();
+  }
 }
 
 start();
+
+process.on('unhandledRejection', error => {
+  logger.error(new Error({ error }));
+  server.close();
+});
+
+const shutdown = () => {
+  server.closeAllConnections?.();
+  server.close();
+  process.exit(0);
+};
+
+process.on('SIGTERM', shutdown);
+process.on('SIGINT', shutdown);

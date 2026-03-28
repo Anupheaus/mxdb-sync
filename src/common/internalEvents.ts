@@ -1,27 +1,6 @@
-import type { Record } from '@anupheaus/common';
 import { defineEvent } from '@anupheaus/socket-api/common';
+import type { MXDBTokenRotatedPayload } from './models';
 
-export interface MXDBPushRecordsEventPayload {
-  collectionName: string;
-  records: Record[];
-}
-
-export interface MXDBRemoveRecordsEventPayload {
-  collectionName: string;
-  ids: string[];
-}
-
-export interface MXDBServerPushEventPayload {
-  collectionName: string;
-  updatedRecords: Record[];
-  removedRecordIds: string[];
-}
-
-export const mxdbServerPush = defineEvent<MXDBServerPushEventPayload>('mxdbServerRecordsUpdate');
-
-export interface MXDBRefreshQueryEventPayload {
-  queryId: string;
-  total: number;
-}
-
-export const mxdbRefreshQuery = defineEvent<MXDBRefreshQueryEventPayload>('mxdbRefreshQuery');
+// ─── §4.4 Token rotation event (server → specific client) ────────────────────
+/** Emitted by the server after rotating this client's auth token. */
+export const mxdbTokenRotated = defineEvent<MXDBTokenRotatedPayload>('mxdbTokenRotated');

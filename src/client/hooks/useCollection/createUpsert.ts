@@ -1,9 +1,7 @@
-import { useSync } from '../../providers';
 import type { Logger, Record } from '@anupheaus/common';
 import type { DbCollection } from '../../providers';
 
-export function createUpsert<RecordType extends Record>(dbCollection: DbCollection<RecordType>, userId: string, logger: Logger) {
-  const { finishSyncing } = useSync();
+export function createUpsert<RecordType extends Record>(dbCollection: DbCollection<RecordType>, logger: Logger) {
 
   async function upsert(record: RecordType): Promise<void>;
   async function upsert(records: RecordType[]): Promise<void>;
@@ -13,9 +11,8 @@ export function createUpsert<RecordType extends Record>(dbCollection: DbCollecti
       logger.warn('Upsert requested with no records to upsert.', { collectionName: dbCollection.name });
       return;
     }
-    await finishSyncing();
     logger.debug('Upserting records...', { records });
-    await dbCollection.upsert(records, userId);
+    await Promise.all(records.map(record => dbCollection.upsert(record)));
     logger.debug('Upsert completed.');
   }
 

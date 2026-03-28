@@ -2,6 +2,22 @@
 
 MXDB-Sync syncs MongoDB-backed collections with clients over a real-time connection (Socket.IO). You define collections once in shared code, use them on the client with React hooks and sync, and on the server with actions, subscriptions, and lifecycle hooks.
 
+## Documentation
+
+Full documentation lives in **`docs/`** in this repo and is **included in the npm package** (so it appears under `node_modules/@anupheaus/mxdb-sync/docs/` after install).
+
+| Start here | Purpose |
+|------------|---------|
+| **[docs/README.md](docs/README.md)** | Index: guides, reference, plans, archive |
+| **[docs/guides/client-guide.md](docs/guides/client-guide.md)** | React: `MXDBSync`, hooks, auth, sync |
+| **[docs/guides/server-guide.md](docs/guides/server-guide.md)** | Node: `startServer`, MongoDB, extensions |
+| **[docs/reference/tech-overview.md](docs/reference/tech-overview.md)** | Architecture & data-flow diagrams |
+| **[docs/reference/features.md](docs/reference/features.md)** | API map: actions, events, subscriptions |
+
+Deeper design and sync specifications: **`docs/plans/`** (see the index in **`docs/README.md`**).
+
+**[agent.md](agent.md)** (repo root) — short orientation for contributors and AI assistants; points at **`docs/`** and test locations.
+
 ## Package exports
 
 - **`@anupheaus/mxdb-sync/common`** – Shared types and collection definitions.
@@ -63,7 +79,7 @@ function App() {
 }
 
 function Content() {
-  const { get, getAll, upsert, remove, query, useGet, useQuery, useDistinct, onChange } = useCollection(myCollection);
+  const { get, getAll, upsert, remove, query, useGet, useGetAll, useQuery, useDistinct, onChange } = useCollection(myCollection);
   const { isConnected, clientId, isSynchronising } = useMXDBSync();
   // ...
 }
@@ -71,7 +87,7 @@ function Content() {
 
 **MXDBSync** props: **name** (must match server), **collections**, optional **host**, **logger**, **onInvalidToken**, **onUnauthorisedOperation**.
 
-**useCollection(collection)** returns: **get**, **getAll**, **upsert**, **remove**, **query**, **distinct**, **find**, **useGet**, **useQuery**, **useDistinct**, **tableRequest**, **useSubscription**, **onChange**, **config**.
+**useCollection(collection)** returns: **get**, **getAll**, **upsert**, **remove**, **query**, **distinct**, **find**, **useGet**, **useGetAll**, **useQuery**, **useDistinct**, **tableRequest**, **useSubscription**, **onChange**, **config**.
 
 ## Extending collections (server)
 

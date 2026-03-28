@@ -1,19 +1,42 @@
-import type { PromiseMaybe } from '@anupheaus/common';
-import { InternalError, type Record } from '@anupheaus/common';
+import { InternalError, type Logger, type Record } from '@anupheaus/common';
 import { DbCollection } from './DbCollection';
-import { utils } from './utils';
-import type { MXDBCollectionConfig, MXDBCollectionIndex } from '../../../common/models';
-import { SYNC_COLLECTION_SUFFIX } from './dbs-consts';
+import type { MXDBCollectionConfig } from '../../../common/models';
+import { SqliteWorkerClient } from '../../db-worker/SqliteWorkerClient';
+import { buildTableDDL } from '../../db-worker/buildTableDDL';
+
+/** Internal auth table DDL — not part of user-defined collections. */
+const AUTH_TABLE_DDL = `CREATE TABLE IF NOT EXISTS mxdb_authentication (
+  id      TEXT PRIMARY KEY,
+  token   TEXT NOT NULL,
+  keyHash TEXT NOT NULL DEFAULT ''
+)`;
 
 export class Db {
-  constructor(name: string, collections: MXDBCollectionConfig[]) {
+  constructor(
+    name: string,
+    collections: MXDBCollectionConfig[],
+    encryptionKey?: Uint8Array,
+    auditorLogger?: Logger,
+  ) {
     this.#name = name;
-    this.#db = this.#openDb(collections);
-    this.#collections = new Map(collections.map(config => [config.name, new DbCollection(this.#db, config)]));
+    this.#worker = new SqliteWorkerClient({ encryptionKey });
+    // Open the database and ensure all tables exist, then construct collections
+    this.#ready = this.#openDb(collections);
+    this.#collections = new Map(
+      collections.map(config => [
+        config.name,
+        new DbCollection(this.#worker, this.#ready, config, auditorLogger),
+      ]),
+    );
+    // §4.9: Reload the affected collection whenever another tab writes to it
+    this.#worker.setOnExternalChange(collectionName => {
+      this.#collections.get(collectionName)?.reloadFromWorker();
+    });
   }
 
   #name: string;
-  #db: Promise<IDBDatabase>;
+  #worker: SqliteWorkerClient;
+  #ready: Promise<void>;
   #collections: Map<string, DbCollection>;
 
   public get name() { return this.#name; }
@@ -24,116 +47,51 @@ export class Db {
     return collection;
   }
 
-  public async close() {
-    const db = await this.#db;
-    db.close();
-  }
-
-  async #openDb(collections: MXDBCollectionConfig[], version?: number): Promise<IDBDatabase> {
-    const request = window.indexedDB.open(this.#name, version);
-    let hasUpgraded = false;
-    request.onupgradeneeded = event => {
-      const db = (event.target as any).result as IDBDatabase;
-      this.#ensureSystemCollection(db);
-      collections.forEach(this.#addCollection(db));
-      this.#removeUnneededCollections(db, collections);
-      hasUpgraded = true;
-    };
-    let db = await utils.wrap(request);
-    if (hasUpgraded) await this.#updateSystemCollection(db, collections);
-    if (await this.#validateCollections(db, collections)) return db;
-    if (version != null) throw new InternalError(`Database "${this.#name}" attempted to reconfigure itself with new collections, but it failed to validate the new collections`);
-    const nextVersion = db.version + 1;
-    db.close();
-    db = await this.#openDb(collections, nextVersion);
-    await this.#updateSystemCollection(db, collections);
-    return db;
-  }
-
-  #ensureSystemCollection(db: IDBDatabase) {
-    if (db.objectStoreNames.contains('__mxdb')) return;
-    db.createObjectStore('__mxdb', { keyPath: 'collectionName' });
-  }
-
-  async #openSystemCollection<T>(db: IDBDatabase, delegate: (store: IDBObjectStore) => PromiseMaybe<T>): Promise<T> {
-    if (!db.objectStoreNames.contains('__mxdb')) throw new InternalError('System collection not found');
-    const transaction = db.transaction('__mxdb', 'readwrite');
-    const store = transaction.objectStore('__mxdb');
-    try {
-      return await delegate(store);
-    } finally {
-      transaction.commit();
+  public async hasPendingAudits(): Promise<boolean> {
+    for (const collection of this.#collections.values()) {
+      if (await collection.hasPendingAudits()) return true;
     }
+    return false;
   }
 
-  #addCollection(db: IDBDatabase) {
-    return (collection: MXDBCollectionConfig) => {
-      if (collection.disableAudit !== true) this.#addAuditCollection(db, collection.name);
-      if (db.objectStoreNames.contains(collection.name)) return;
-      const store = db.createObjectStore(collection.name, { keyPath: 'id' });
-      this.#updateIndexes(store, collection.indexes ?? []);
-    };
+  public async close(): Promise<void> {
+    await this.#worker.close();
   }
 
-  #addAuditCollection(db: IDBDatabase, collectionName: string) {
-    const auditCollectionName = `${collectionName}${SYNC_COLLECTION_SUFFIX}`;
-    if (db.objectStoreNames.contains(auditCollectionName)) return;
-    db.createObjectStore(auditCollectionName, { keyPath: 'id' });
+  // ─── §4.4 Auth token persistence (internal mxdb_authentication table) ───────
+
+  /** Read the stored auth credentials, or undefined if not yet stored. */
+  public async readAuth(): Promise<{ token: string; keyHash: string } | undefined> {
+    await this.#ready;
+    const rows = await this.#worker.query<{ token: string; keyHash: string }>(
+      'SELECT token, keyHash FROM mxdb_authentication WHERE id = \'singleton\' LIMIT 1',
+    );
+    return rows[0];
   }
 
-  #removeUnneededCollections(db: IDBDatabase, collections: MXDBCollectionConfig[]) {
-    const allCollectionNames = this.#getAllCollectionNames(collections);
-    Array.from(db.objectStoreNames).filter(name => !allCollectionNames.includes(name) && name !== '__mxdb').forEach(name => db.deleteObjectStore(name));
+  /** Persist auth credentials (replaces any existing ones). */
+  public async writeAuth(token: string, keyHash: string): Promise<void> {
+    await this.#ready;
+    await this.#worker.exec(
+      'INSERT OR REPLACE INTO mxdb_authentication(id, token, keyHash) VALUES (\'singleton\', ?, ?)',
+      [token, keyHash],
+    );
   }
 
-  #updateIndexes(store: IDBObjectStore, indexes: MXDBCollectionIndex[]) {
-    const indexesToRemove = Array.from(store.indexNames).filter(name => indexes.findBy('name', name) == null);
-    indexesToRemove.forEach(name => store.deleteIndex(name));
-    // Ensure we only create each index name once, and avoid throwing if the index already exists.
-    const uniqueByName = new Map<string, MXDBCollectionIndex>();
-    indexes.forEach(index => {
-      if (!uniqueByName.has(index.name)) uniqueByName.set(index.name, index);
-    });
-
-    uniqueByName.forEach(index => {
-      const desiredKeyPath = index.fields as unknown as string | string[];
-      const desiredUnique = index.isUnique === true;
-
-      if (store.indexNames.contains(index.name)) {
-        // If the existing index doesn't match the desired definition, recreate it.
-        const existing = store.index(index.name);
-        const sameKeyPath = JSON.stringify(existing.keyPath) === JSON.stringify(desiredKeyPath);
-        const sameUnique = existing.unique === desiredUnique;
-        if (sameKeyPath && sameUnique) return;
-        store.deleteIndex(index.name);
-      }
-
-      store.createIndex(index.name, desiredKeyPath, { unique: desiredUnique });
-    });
+  /** Remove the stored auth credentials (e.g. on sign-out). */
+  public async clearAuth(): Promise<void> {
+    await this.#ready;
+    await this.#worker.exec('DELETE FROM mxdb_authentication WHERE id = \'singleton\'');
   }
 
-  #getAllCollectionNames(collections: MXDBCollectionConfig[]): string[] {
-    return collections.mapMany(({ name, disableAudit }) => [name, disableAudit !== true ? `${name}${SYNC_COLLECTION_SUFFIX}` : undefined].removeNull());
-  }
-
-  async #validateCollections(db: IDBDatabase, collections: MXDBCollectionConfig[]): Promise<boolean> {
-    const allCollectionNames = this.#getAllCollectionNames(collections);
-    if (db.objectStoreNames.length !== allCollectionNames.length + 1) return false;
-    return this.#openSystemCollection(db, async systemCollection => {
-      for (const collection of collections) {
-        if (!db.objectStoreNames.contains(collection.name)) return false;
-        const collectionData = await utils.wrap(systemCollection.get(collection.name));
-        if (collectionData == null) return false;
-        if (collectionData.hash != Object.hash(collection)) return false;
-      }
-      return true;
-    });
-  }
-
-  async #updateSystemCollection(db: IDBDatabase, collections: MXDBCollectionConfig[]) {
-    await this.#openSystemCollection(db, async systemCollection => {
-      await utils.wrap(systemCollection.clear());
-      await collections.forEachPromise(async collection => { await utils.wrap(systemCollection.put({ collectionName: collection.name, hash: Object.hash(collection) })); });
-    });
+  async #openDb(collections: MXDBCollectionConfig[]): Promise<void> {
+    const statements: string[] = [
+      AUTH_TABLE_DDL, // always create the internal auth table first
+    ];
+    for (const config of collections) {
+      const isAudited = config.disableAudit !== true;
+      statements.push(...buildTableDDL(config.name, config.indexes ?? [], isAudited));
+    }
+    await this.#worker.open(this.#name, statements);
   }
 }

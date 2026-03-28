@@ -1,53 +1,40 @@
 import { provideDb } from './providers';
-import type { MXDBCollection } from '../common';
-import { seedCollections } from './seeding';
-import { internalActions } from './actions';
-import { startServer as startSocketServer, useSocketAPI } from '@anupheaus/socket-api/server';
-import type { SocketAPIUser, ServerConfig as StartSocketServerConfig } from '@anupheaus/socket-api/server';
-import { internalSubscriptions } from './subscriptions';
 import { Logger } from '@anupheaus/common';
-import { addClientWatches, removeClientWatches } from './clientDbWatches';
+import { setAuthConfig } from './auth/authConfig';
+import { createInviteLink, getDevices, enableDevice, disableDevice } from './auth/deviceManagement';
+import { startAuthenticatedServer } from './startAuthenticatedServer';
+import type { ServerConfig, ServerInstance } from './internalModels';
+import { registerAuthInviteRoute } from './auth/registerAuthInviteRoute';
 
-export interface ServerConfig extends StartSocketServerConfig {
-  collections: MXDBCollection[];
-  mongoDbUrl: string;
-  mongoDbName: string;
-  clearDatabase?: boolean;
-  shouldSeedCollections?: boolean;
-  /** Idle window (ms) before change stream events are dispatched; events within this window are batched. Default 20. */
-  changeStreamDebounceMs?: number;
-}
+const DEFAULT_INVITE_TTL_MS = 24 * 60 * 60 * 1000; // 24 hours
 
-const adminUser: SocketAPIUser = {
-  id: Math.emptyId(),
-};
-
-export async function startServer({ logger, collections, mongoDbName, mongoDbUrl, shouldSeedCollections, changeStreamDebounceMs, ...config }: ServerConfig) {
+export async function startServer(config: ServerConfig): Promise<ServerInstance> {
+  let { logger, name, collections, mongoDbName, mongoDbUrl, changeStreamDebounceMs, onGetUserDetails, onRegisterRoutes, inviteLinkTTLMs } = config;
   if (!logger) logger = Logger.getCurrent();
   if (!logger) logger = new Logger('MXDB-Sync');
-  return logger.provide(() => provideDb(mongoDbName, mongoDbUrl, collections, db => startSocketServer({
-    ...config,
-    logger,
-    actions: [...internalActions, ...(config.actions ?? [])],
-    subscriptions: [...internalSubscriptions, ...(config.subscriptions ?? [])],
-    contextWrapper: delegate => db.wrap(delegate)(),
-    async onStartup() {
-      const { impersonateUser } = useSocketAPI();
 
-      await impersonateUser(adminUser, async () => {
-        const startTime = Date.now();
-        if (shouldSeedCollections === true) await seedCollections(collections);
-        console.log(`Seeding took ${Date.now() - startTime}ms`); // eslint-disable-line no-console
-        await config.onStartup?.();
-      });
-    },
-    onClientConnected: db.wrap(async client => {
-      addClientWatches(client, collections);
-      await config.onClientConnected?.(client);
-    }),
-    onClientDisconnected: db.wrap(async client => {
-      removeClientWatches(client);
-      await config.onClientDisconnected?.(client);
-    }),
-  }), changeStreamDebounceMs));
+  // Store auth callbacks for use inside socket actions
+  setAuthConfig({ onGetUserDetails, inviteLinkTTLMs });
+
+  return logger.provide(() => provideDb(mongoDbName, mongoDbUrl, collections, async db => {
+
+    const { app } = await startAuthenticatedServer({
+      ...config,
+      db,
+      logger,
+      onRegisterRoutes: async router => {
+        await onRegisterRoutes?.(router);
+        registerAuthInviteRoute(router, name, db, config.inviteLinkTTLMs ?? DEFAULT_INVITE_TTL_MS, config.onGetUserDetails);
+      },
+    });
+    if (app == null) throw new Error('Failed to start server');
+
+    return {
+      app,
+      createInviteLink: async (userId: string, domain: string) => createInviteLink(db, userId, domain, name),
+      getDevices: async (userId: string) => getDevices(db, userId),
+      enableDevice: async (requestId: string) => enableDevice(db, requestId),
+      disableDevice: async (requestId: string) => disableDevice(db, requestId),
+    };
+  }, changeStreamDebounceMs));
 }

@@ -5,7 +5,7 @@ import { useRef } from 'react';
 import type { UseSubscription } from './createUseSubscription';
 import type { DbCollection } from '../../providers';
 import { useSubscriptionWrapper } from './useSubscriptionWrapper';
-import type { AddDebugTo, AddDisableTo } from '../../../common/internalModels';
+import type { AddDebugTo, AddDisableTo } from '../../../common/models';
 
 export interface QueryResponse<RecordType extends Record> {
   records: RecordType[];

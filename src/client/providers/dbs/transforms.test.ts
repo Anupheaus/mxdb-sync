@@ -3,54 +3,82 @@ import { DateTime } from 'luxon';
 import { serialise, deserialise } from './transforms';
 import type { Record } from '@anupheaus/common';
 
+interface RowCreatedAt extends Record {
+  id: string;
+  createdAt: DateTime;
+}
+
+interface RowAtDate extends Record {
+  id: string;
+  at: Date;
+}
+
+interface RowScalars extends Record {
+  id: string;
+  n: number;
+  s: string;
+}
+
+interface RowIso extends Record {
+  id: string;
+  createdAt: string;
+}
+
+interface RowName extends Record {
+  id: string;
+  name: string;
+}
+
+interface RowAtLuxon extends Record {
+  id: string;
+  at: DateTime;
+}
+
 describe('transforms', () => {
   describe('serialise', () => {
     it('converts DateTime to ISO string', () => {
       const dt = DateTime.utc(2024, 6, 15, 12, 0, 0);
-      const record = { id: '1', createdAt: dt };
-      const out = serialise(record as Record);
-      expect(out.createdAt).toBe(dt.toISO());
-      expect(typeof out.createdAt).toBe('string');
+      const record: RowCreatedAt = { id: '1', createdAt: dt };
+      expect(serialise(record)).toEqual({ id: '1', createdAt: dt.toISO() });
     });
 
     it('converts Date to ISO string', () => {
       const d = new Date('2024-01-01T00:00:00.000Z');
-      const record = { id: '1', at: d };
-      const out = serialise(record as Record);
-      expect(out.at).toBe(d.toISOString());
+      const record: RowAtDate = { id: '1', at: d };
+      expect(serialise(record)).toEqual({ id: '1', at: d.toISOString() });
     });
 
     it('clones and leaves other values unchanged', () => {
-      const record = { id: '1', n: 1, s: 'hi' };
-      const out = serialise(record as Record);
-      expect(out.id).toBe('1');
-      expect(out.n).toBe(1);
-      expect(out.s).toBe('hi');
+      const record: RowScalars = { id: '1', n: 1, s: 'hi' };
+      expect(serialise(record)).toEqual(record);
     });
   });
 
   describe('deserialise', () => {
     it('converts ISO date strings to DateTime', () => {
       const iso = '2024-06-15T12:00:00.000Z';
-      const record = { id: '1', createdAt: iso };
-      const out = deserialise(record as Record);
+      const record: RowIso = { id: '1', createdAt: iso };
+      const out = deserialise(record);
       expect(DateTime.isDateTime(out.createdAt)).toBe(true);
-      expect((out.createdAt as DateTime).toUTC().toISO()).toBe(iso);
+      if (DateTime.isDateTime(out.createdAt)) {
+        expect(out.createdAt.toUTC().toISO()).toBe(iso);
+      }
     });
 
     it('leaves non-date strings unchanged', () => {
-      const record = { id: '1', name: 'hello' };
-      const out = deserialise(record as Record);
-      expect(out.name).toBe('hello');
+      const record: RowName = { id: '1', name: 'hello' };
+      expect(deserialise(record)).toEqual(record);
     });
 
     it('round-trips DateTime with serialise', () => {
       const dt = DateTime.utc(2024, 1, 1);
-      const record = { id: '1', at: dt };
-      const ser = serialise(record as Record);
-      const des = deserialise(ser as Record);
+      const record: RowAtLuxon = { id: '1', at: dt };
+      const ser = serialise(record);
+      const des = deserialise(ser);
       expect(DateTime.isDateTime(des.at)).toBe(true);
-      expect((des.at as DateTime).toMillis()).toBe(dt.toMillis());
+      if (DateTime.isDateTime(des.at)) {
+        expect(des.at.toMillis()).toBe(dt.toMillis());
+      }
     });
   });
 });

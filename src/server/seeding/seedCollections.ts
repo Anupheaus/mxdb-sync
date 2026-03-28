@@ -7,7 +7,7 @@ import type { Logger, Record } from '@anupheaus/common';
 import type { MXDBCollection } from '../../common';
 import { loadSeededData, saveSeededData } from './seededData';
 
-/** For createSeed() and common UseCollection type – function that returns collection API + seedWith for any collection. */
+/** Common `UseCollection` type – function that returns collection API + seedWith for any collection. */
 export type UseSeedCollection = <RecordType extends Record>(collection: MXDBCollection<RecordType>) => UseCollection<RecordType> & {
   seedWith: SeedWithFn<RecordType>;
 };

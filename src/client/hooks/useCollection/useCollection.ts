@@ -1,5 +1,5 @@
-import type { Record } from '@anupheaus/common';
-import type { MXDBCollection } from '../../../common';
+import type { Record, Unsubscribe } from '@anupheaus/common';
+import type { MXDBCollection, MXDBCollectionChangeEvent } from '../../../common';
 import { createGet } from './createGet';
 import { createUseGet } from './createUseGet';
 import { createUpsert } from './createUpsert';
@@ -13,23 +13,41 @@ import { createFind } from './createFind';
 import { createUseDistinct } from './createUseDistinct';
 import { useLogger } from '@anupheaus/react-ui';
 import { useDb } from '../../providers';
-import { useUser } from '@anupheaus/socket-api/client';
 import { createGetAll } from './createGetAll';
+import { createUseGetAll } from './createUseGetAll';
 import { configRegistry } from '../../../common/registries';
+import type { DbCollection } from '../../providers/dbs/DbCollection';
+
+function createOnChange<RecordType extends Record>(dbCollection: DbCollection<RecordType>) {
+  return (callback: (event: MXDBCollectionChangeEvent<RecordType>) => void): Unsubscribe =>
+    dbCollection.onChange(internalEvent => {
+      if (internalEvent.type === 'upsert') {
+        callback({ type: 'upsert', records: internalEvent.records });
+      } else if (internalEvent.type === 'remove') {
+        callback({ type: 'remove', recordIds: internalEvent.ids });
+      } else if (internalEvent.type === 'clear' && internalEvent.ids.length > 0) {
+        callback({ type: 'remove', recordIds: internalEvent.ids });
+      }
+    });
+}
 
 export function useCollection<RecordType extends Record>(collection: MXDBCollection<RecordType>, dbName?: string) {
   const { db } = useDb(dbName);
-  const { user } = useUser();
-  const userId = user?.id ?? Math.emptyId();
   const config = configRegistry.getOrError(collection);
+
+  // §4.5 — Wrong-side collection guard: ServerOnly collections must not be used on the client
+  if (config.syncMode === 'ServerOnly') {
+    throw new Error(`Collection "${collection.name}" is ServerOnly and cannot be accessed on the client.`);
+  }
+
   const dbCollection = db.use<RecordType>(collection.name);
   const logger = useLogger(collection.name);
 
   const get = createGet(dbCollection);
-  const getAll = createGetAll(dbCollection);
-  const upsert = createUpsert(dbCollection, userId, logger);
-  const remove = createRemove(dbCollection, userId, logger);
+  const upsert = createUpsert(dbCollection, logger);
+  const remove = createRemove(dbCollection, logger);
   const useSubscription = createUseSubscription();
+  const getAll = createGetAll(dbCollection, useSubscription, logger);
   const makeNewQuery = () => createQuery(dbCollection, useSubscription, logger);
   const query = makeNewQuery();
   const distinct = createDistinct(dbCollection, useSubscription, logger);
@@ -38,7 +56,8 @@ export function useCollection<RecordType extends Record>(collection: MXDBCollect
   const useGet = createUseGet(dbCollection, get);
   const useQuery = createUseQuery(makeNewQuery());
   const useDistinct = createUseDistinct(distinct);
-  const onChange = dbCollection.onChange;
+  const useGetAll = createUseGetAll(getAll);
+  const onChange = createOnChange(dbCollection);
 
   return {
     config,
@@ -52,6 +71,7 @@ export function useCollection<RecordType extends Record>(collection: MXDBCollect
     useGet,
     useQuery,
     useDistinct,
+    useGetAll,
     useSubscription,
     tableRequest,
     onChange,

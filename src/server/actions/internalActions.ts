@@ -1,16 +1,16 @@
 import type { SocketAPIServerAction } from '@anupheaus/socket-api/server';
-import { serverRemoveAction } from './removeAction';
-import { serverSyncAction } from './syncAction';
-import { serverUpsertAction } from './upsertAction';
+import { clientToServerSyncAction } from './clientToServerSyncAction';
 import { serverGetAction } from './getAction';
+import { serverGetAllAction } from './getAllAction';
 import { serverQueryAction } from './queryAction';
 import { serverDistinctAction } from './distinctAction';
+import { reconcileAction } from './reconcileAction';
 export const internalActions: SocketAPIServerAction[] = [
-  serverSyncAction,
-  serverUpsertAction,
-  serverRemoveAction,
+  clientToServerSyncAction,
   serverGetAction,
+  serverGetAllAction,
   serverQueryAction,
   serverDistinctAction,
+  reconcileAction,
 ];
 

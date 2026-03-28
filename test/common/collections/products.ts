@@ -21,6 +21,5 @@ export namespace ProductRecord {
 export const products = defineCollection<ProductRecord>({
   name: 'products',
   indexes: [],
-  version: 1,
 });
 

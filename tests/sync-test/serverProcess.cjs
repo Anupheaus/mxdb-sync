@@ -3,10 +3,23 @@
 // hitting socket-api global handler registration conflicts.
 
 require('ts-node/register/transpile-only');
+require('tsconfig-paths/register');
 
 const https = require('https');
 const fs = require('fs');
 const path = require('path');
+
+// File-based diagnostic logger shared with the vitest client process.
+const DIAG_FILE = process.env.MXDB_DIAG_FILE || '';
+function diagLog(message, data) {
+  if (!DIAG_FILE) return;
+  try {
+    const ts = process.hrtime.bigint().toString();
+    const iso = new Date().toISOString();
+    const line = `${ts}\t${iso}\t[pid:${process.pid}]\tserver-process\t${message}\t${data ? JSON.stringify(data) : ''}\n`;
+    fs.appendFileSync(DIAG_FILE, line);
+  } catch { /* ignore */ }
+}
 
 const { Logger } = require('@anupheaus/common');
 const { startServer } = require('../../src/server');
@@ -40,7 +53,10 @@ function createIpcLogger(baseLogger, name) {
     }
   };
 
-  const levels = new Set(['trace', 'debug', 'info', 'warn', 'error', 'fatal', 'log']);
+  // Include every `Logger` level method so `useLogger()` / sub-loggers forward to the parent for
+  // `server_log` lines (sync-test run file). `silly` / `always` were missing — e.g. C2S action
+  // `logger.silly(...)` never called `send` because the proxy fell through to `.bind(target)`.
+  const levels = new Set(['silly', 'trace', 'debug', 'info', 'warn', 'error', 'fatal', 'always', 'log']);
 
   return new Proxy(baseLogger, {
     get(target, prop, receiver) {
@@ -93,6 +109,7 @@ async function main() {
 
   const addr = server.address();
   const actualPort = addr && typeof addr === 'object' ? addr.port : PORT;
+  diagLog('server listening', { port: actualPort });
   if (process.send) process.send({ type: 'ready', port: actualPort });
 
   const shutdown = () => {

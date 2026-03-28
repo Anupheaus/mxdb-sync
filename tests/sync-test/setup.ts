@@ -5,11 +5,20 @@
  * Server is started in beforeAll after temporarily deleting window so Logger does not treat the process as browser.
  */
 import 'fake-indexeddb/auto';
-import '@anupheaus/common';
+// Do not `import '@anupheaus/common'` here — it loads the real `Logger` into Vite’s cache before
+// `vi.mock('@anupheaus/common')` in the integration test can apply. Prototype extensions load when the
+// mocked module’s `importOriginal()` runs on first test import.
+import path from 'path';
+
+// Set up a per-run diagnostic log file shared between vitest process and server child process.
+// Both processes write directly via appendFileSync — no IPC buffering.
+// Disabled automatically in non-test runs (file path not set).
+const diagFile = path.resolve(__dirname, `logs/diag-${new Date().toISOString().replace(/[:.]/g, '-')}.log`);
+process.env.MXDB_DIAG_FILE = diagFile;
 import { JSDOM } from 'jsdom';
 
 const dom = new JSDOM('<!DOCTYPE html><html><body></body></html>', {
-  url: 'http://localhost',
+  url: 'https://localhost',
 });
 
 (dom.window as unknown as { indexedDB: IDBFactory }).indexedDB = (global as unknown as { indexedDB: IDBFactory }).indexedDB;
@@ -17,75 +26,17 @@ const dom = new JSDOM('<!DOCTYPE html><html><body></body></html>', {
 (global as unknown as { window: unknown }).window = dom.window;
 (global as unknown as { document: Document }).document = dom.window.document;
 
-// Ensure URL.createObjectURL exists for Worker/blob shims used by DbCollection utils.
+// Ensure URL.createObjectURL exists (needed by some client code). Preserve URL as a
+// constructor by patching only the missing static method rather than replacing it.
 const urlGlobal = (dom.window as unknown as { URL?: typeof URL }).URL ?? URL;
-const createObjectURLShim = (...args: any[]) => {
-  // We don't care about the actual blob URL in tests; it just needs to be a string.
-  return typeof (urlGlobal as any).createObjectURL === 'function'
-    ? (urlGlobal as any).createObjectURL(...args)
-    : 'blob:mxdb-sync-test';
-};
-(global as unknown as { URL: any }).URL = {
-  ...urlGlobal,
-  createObjectURL: createObjectURLShim,
-};
+if (typeof (urlGlobal as any).createObjectURL !== 'function') {
+  (urlGlobal as any).createObjectURL = () => 'blob:mxdb-sync-test';
+}
+(global as unknown as { URL: unknown }).URL = urlGlobal;
 
 // Many client modules assume `self` exists (browser/worker global). Point it at the window.
 (global as unknown as { self: unknown }).self = dom.window as unknown;
 
-// Minimal Worker shim for tests (client DB layer uses a web worker for IndexedDB writes).
-// We execute the requested IDB operations on the main thread (fake-indexeddb) instead.
-type WorkerMessageHandler = (event: { data: any }) => void;
-class TestWorker {
-  #onMessage: WorkerMessageHandler | null = null;
-
-  // Worker API used by app code
-  public postMessage(payload: any) {
-    void this.#handle(payload);
-  }
-
-  public addEventListener(type: string, handler: WorkerMessageHandler) {
-    if (type === 'message') this.#onMessage = handler;
-  }
-
-  public removeEventListener() { /* no-op */ }
-  public terminate() { /* no-op */ }
-
-  async #handle(payload: any) {
-    // If app code ever wires a worker-side handler, call it; otherwise perform IDB ops directly.
-    if (this.#onMessage) {
-      this.#onMessage({ data: payload });
-      return;
-    }
-    const { dbName, collectionName, action, records, ids } = payload ?? {};
-    const indexedDB = (dom.window as any).indexedDB as IDBFactory | undefined;
-    if (!indexedDB) return;
-
-    const wrap = <T = unknown>(req: IDBRequest<T>) => new Promise<T>((resolve, reject) => {
-      req.onsuccess = () => resolve(req.result);
-      req.onerror = () => reject(req.error);
-    });
-
-    const db = await wrap(indexedDB.open(dbName));
-    const tx = db.transaction(collectionName, 'readwrite');
-    const store = tx.objectStore(collectionName);
-
-    const wrapTx = () => new Promise<void>((resolve, reject) => {
-      tx.oncomplete = () => resolve();
-      tx.onerror = () => reject(tx.error);
-      tx.onabort = () => reject(tx.error);
-    });
-
-    if (action === 'upsert' && Array.isArray(records)) {
-      for (const r of records) store.put(r);
-    } else if (action === 'delete' && Array.isArray(ids)) {
-      for (const id of ids) store.delete(id);
-    } else if (action === 'clear') {
-      store.clear();
-    }
-
-    await wrapTx();
-  }
-}
-
-(global as unknown as { Worker: unknown }).Worker = TestWorker as unknown;
+// SqliteWorkerClient detects Worker availability at construction time.
+// In Node.js/test environments Worker is not a global, so SqliteWorkerClient
+// automatically uses its inline SQLite runner (no worker required).

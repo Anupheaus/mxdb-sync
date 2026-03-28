@@ -1,9 +1,9 @@
 import type { TableColumn } from '@anupheaus/react-ui';
-import { createComponent, Flex, Table, useBound } from '@anupheaus/react-ui';
+import { createComponent, Flex, Table, useBound, useDialog } from '@anupheaus/react-ui';
 import type { AddressRecord } from '../common';
 import { addresses } from '../common';
 import { useCollection } from '../../src/client';
-import { useAddressDialog } from './AddressDialog';
+import { AddressDialogDefinition } from './AddressDialog';
 
 const columns: TableColumn<AddressRecord>[] = [
   { id: 'firstLine', field: 'firstLine', label: 'First Line' },
@@ -15,13 +15,19 @@ const columns: TableColumn<AddressRecord>[] = [
 
 export const Addresses = createComponent('Addresses', () => {
   const { tableRequest, upsert, remove } = useCollection(addresses);
-  const { AddressDialog, openAddressDialog } = useAddressDialog();
+  const { openAddressDialog } = useDialog(AddressDialogDefinition);
 
-  const onAdd = useBound(async () => { await openAddressDialog(undefined, upsert); });
+  const onAdd = useBound(async () => {
+    await openAddressDialog(undefined, upsert);
+  });
 
-  const onEdit = useBound(async (address: AddressRecord) => { await openAddressDialog(address, upsert); });
+  const onEdit = useBound(async (address: AddressRecord) => {
+    await openAddressDialog(address, upsert);
+  });
 
-  const onRemove = useBound(async (address: AddressRecord) => { await remove(address.id); });
+  const onRemove = useBound(async (address: AddressRecord) => {
+    await remove(address.id);
+  });
 
   return (
     <Flex tagName="addresses" width={700} height={500}>
@@ -32,7 +38,6 @@ export const Addresses = createComponent('Addresses', () => {
         onAdd={onAdd}
         onRemove={onRemove}
       />
-      <AddressDialog />
     </Flex>
   );
 });

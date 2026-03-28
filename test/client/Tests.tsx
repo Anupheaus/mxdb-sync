@@ -52,13 +52,9 @@ export const Tests = createComponent('Tests', () => {
     if (record == null) {
       setRemoveRecordWasSuccessful(false);
     } else {
-      const result = await remove(newAddress.id);
-      if (result === false) {
-        setRemoveRecordWasSuccessful(false);
-      } else {
-        record = await get(newAddress.id);
-        setRemoveRecordWasSuccessful(record == null);
-      }
+      await remove(newAddress.id);
+      record = await get(newAddress.id);
+      setRemoveRecordWasSuccessful(record == null);
     }
     setIsBusy(false);
   });

@@ -28,10 +28,11 @@ function useTypedCollection<RecordType extends Record>(db: ServerDb, dbCollectio
   return {
     collection: dbCollection.collection,
     get: dbCollection.get,
+    getAudit: dbCollection.getAudit,
     query: dbCollection.query,
     find: dbCollection.find,
     upsert: dbCollection.upsert,
-    remove: dbCollection.delete,
+    remove: dbCollection.remove,
     distinct: dbCollection.distinct,
     clear: dbCollection.clear,
     getRecordCount: dbCollection.count,

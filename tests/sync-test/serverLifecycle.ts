@@ -7,7 +7,6 @@ const MONGO_DB_NAME = 'mxdb-sync-test';
 
 let memoryServer: MongoMemoryReplSet | null = null;
 let currentPort: number = DEFAULT_PORT;
-let collections: MXDBCollection[] = [];
 let serverChild: ChildProcess | null = null;
 
 type ServerLogCallback = (stream: 'stdout' | 'stderr', line: string) => void;
@@ -54,9 +53,8 @@ export async function startMongo(): Promise<{ getUri: () => string; stop: () => 
 export async function startServerInstance(
   port: number,
   mongoUri: string,
-  collectionsList: MXDBCollection[],
+  _collectionsList: MXDBCollection[],
 ): Promise<ServerInstance> {
-  collections = collectionsList;
   if (serverChild != null) throw new Error('Server child already running');
 
   lifecycleLog('startServerInstance.spawn', { requestedPort: port });
@@ -113,12 +111,12 @@ export async function startServerInstance(
         serverLogCallback('stdout', line);
       }
     });
-    child.on('exit', (code) => {
+    child.on('exit', code => {
       clearTimeout(timeout);
       lifecycleLog('startServerInstance.exitEarly', { code });
       reject(new Error(`Server child exited early (code ${code})`));
     });
-    child.on('error', (err) => {
+    child.on('error', err => {
       clearTimeout(timeout);
       lifecycleLog('startServerInstance.error', { message: String((err as any)?.message ?? err) });
       reject(err);
@@ -134,13 +132,20 @@ export async function startServerInstance(
     },
     async stop() {
       if (serverChild != null) {
-        const child = serverChild;
+        const proc = serverChild;
         serverChild = null;
-        lifecycleLog('stopServerInstance.begin', { pid: child.pid });
-        await new Promise<void>(resolve => {
-          child.once('exit', () => resolve());
-          child.kill('SIGTERM');
-          setTimeout(() => resolve(), 5000);
+        lifecycleLog('stopServerInstance.begin', { pid: proc.pid });
+        await new Promise<void>((resolve, reject) => {
+          const forceMs = 15_000;
+          const t = setTimeout(() => {
+            reject(new Error(`Server child pid ${proc.pid} did not exit within ${forceMs}ms`));
+          }, forceMs);
+          proc.once('exit', (code, signal) => {
+            clearTimeout(t);
+            lifecycleLog('stopServerInstance.exited', { code, signal });
+            resolve();
+          });
+          proc.kill('SIGTERM');
         });
         lifecycleLog('stopServerInstance.done');
       }
@@ -178,10 +183,10 @@ export async function startLifecycle(
 
   async function restartServer(): Promise<ServerInstance> {
     lifecycleLog('lifecycle.restart.begin');
-    await instance.stop();
-    lifecycleLog('lifecycle.restart.stopped');
-    await new Promise(r => setTimeout(r, SERVER_RESTART_WAIT_MS));
-    lifecycleLog('lifecycle.restart.waited', { waitMs: SERVER_RESTART_WAIT_MS });
+    await instance.stop(); // awaits child `exit` (see ServerInstance.stop)
+    lifecycleLog('lifecycle.restart.afterExit');
+    await new Promise<void>(r => setTimeout(r, SERVER_RESTART_WAIT_MS));
+    lifecycleLog('lifecycle.restart.postExitDelay', { waitMs: SERVER_RESTART_WAIT_MS });
     instance = await startServerInstance(portUsed, mongoUri, collectionsList);
     lifecycleLog('lifecycle.restart.ready', { portUsed: instance.port });
     return instance;
@@ -202,10 +207,16 @@ export async function stopLifecycle(stopMongo = true): Promise<void> {
   if (serverChild != null) {
     const child = serverChild;
     serverChild = null;
-    await new Promise<void>(resolve => {
-      child.once('exit', () => resolve());
+    await new Promise<void>((resolve, reject) => {
+      const forceMs = 15_000;
+      const t = setTimeout(() => {
+        reject(new Error(`Server child did not exit within ${forceMs}ms`));
+      }, forceMs);
+      child.once('exit', () => {
+        clearTimeout(t);
+        resolve();
+      });
       child.kill('SIGTERM');
-      setTimeout(() => resolve(), 5000);
     });
   }
   if (stopMongo) {

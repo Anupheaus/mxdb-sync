@@ -6,7 +6,7 @@
     "experimentalDecorators": true,
     "removeComments": true,
     "noEmit": true,
-    "module": "CommonJS",
+    "module": "ES2020",
     "resolveJsonModule": true,
     "esModuleInterop": true,
     "emitDecoratorMetadata": true,
@@ -17,6 +17,7 @@
     "noErrorTruncation": true,
     "lib": [
       "DOM",
+      "WebWorker",
       "ES2020",
       "ES2021",
       "ESNext.AsyncIterable"
@@ -40,6 +41,11 @@
       "@anupheaus/socket-api/common": [
         "../socket-api/src/common",
       ]
+    }
+  },
+  "ts-node": {
+    "compilerOptions": {
+      "module": "CommonJS"
     }
   },
   "include": [

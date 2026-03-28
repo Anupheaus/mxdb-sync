@@ -27,10 +27,9 @@ export interface SyncTestRecord extends Record {
 export const syncTestCollection = defineCollection<SyncTestRecord>({
   name: 'syncTest',
   indexes: [],
-  version: 1,
 });
 
-/** One update recorded for "record of truth" (clientId, record). Last-write-wins uses record.updatedAt to match server merge semantics. */
+/** Logged upsert for debugging / extensions (full payload as sent from the test harness). */
 export interface RecordOfTruthEntry {
   clientId: string;
   record: SyncTestRecord;
@@ -53,6 +52,9 @@ export type RunLogEvent =
   | 'client_upsert_flush_done'
   | 'client_upsert_request'
   | 'client_upsert_response'
+  | 'client_get_request'
+  | 'client_get_response'
+  | 'client_getAll_subscribe'
   | 'client_remove'
   | 'client_remove_offline'
   | 'client_remove_kept_due_to_history'
@@ -70,7 +72,13 @@ export type RunLogEvent =
   | 'sync_response'
   | 'sync_ack'
   | 'server_log'
+  /** Any {@link Logger} entry in the vitest process (client LoggerProvider, etc.). */
+  | 'app_logger'
   | 'integrity_report'
+  /** After mongo settle / final grace: C2S queue sizes and LWW client-oracle record count. */
+  | 'post_settle_diag'
+  /** One event per troubled id: LWW oracle row, truth live + audit, server live + _sync audit, per-client local row/audit. */
+  | 'integrity_mismatch_record'
   | 'error';
 
 export interface RunLogDetail {

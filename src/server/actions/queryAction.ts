@@ -1,18 +1,21 @@
-import { createServerAction } from '@anupheaus/socket-api/server';
+import { createServerActionHandler } from '@anupheaus/socket-api/server';
 import { mxdbQueryAction } from '../../common';
-import { useClient } from '../hooks';
-import { useDb } from '../providers';
+import { configRegistry } from '../../common';
+import { useDb, useServerToClientSync } from '../providers';
 
-export async function handleQuery(params: { collectionName: string; [key: string]: unknown }) {
+export async function handleQuery(params: { collectionName: string;[key: string]: unknown; }) {
   const { collectionName, ...request } = params;
   const db = useDb();
   const dbCollection = db.use(collectionName);
-  const { pushRecords } = useClient();
 
   const { data: records, total } = await dbCollection.query(request);
   if (records.length === 0) return [];
-  await pushRecords(dbCollection.collection, records);
+
+  const config = configRegistry.getOrError(dbCollection.collection);
+  const { pushRecordsToClient } = useServerToClientSync();
+  await pushRecordsToClient(collectionName, records.ids(), [], config.disableAudit === true);
+
   return total;
 }
 
-export const serverQueryAction = createServerAction(mxdbQueryAction, handleQuery);
+export const serverQueryAction = createServerActionHandler(mxdbQueryAction, handleQuery);

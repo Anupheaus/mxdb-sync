@@ -1,7 +1,8 @@
 import { useLogger } from '@anupheaus/common';
-import { DbProvider } from './DbContext';
+import { setDb, setServerToClientSync } from './DbContext';
 import { ServerDb } from './ServerDb';
 import type { MXDBCollection } from '../../../common';
+import { ServerToClientSynchronisation } from '../../ServerToClientSynchronisation';
 
 export function provideDb<R>(
   mongoDbName: string,
@@ -20,5 +21,7 @@ export function provideDb<R>(
     changeStreamDebounceMs,
   });
 
-  return DbProvider.run(db, () => delegate(db));
+  setDb(db);
+  setServerToClientSync(ServerToClientSynchronisation.createNoOp(collections));
+  return delegate(db);
 }

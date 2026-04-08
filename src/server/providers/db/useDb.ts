@@ -1,1 +1,1 @@
-export { useDb, useServerToClientSync, useServerToClientSynchronisation, setServerToClientSync } from './DbContext';
+export { useDb, useServerToClientSynchronisation, setServerToClientSync } from './DbContext';

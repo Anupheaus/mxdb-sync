@@ -1,7 +1,5 @@
 import type { MXDBCollection } from '../common';
-import { auditor, configRegistry } from '../common';
 import { Logger, is } from '@anupheaus/common';
-import { hashRecord } from '../common/auditor/hash';
 import { useDb } from './providers';
 import type { ServerToClientSynchronisation } from './ServerToClientSynchronisation';
 import type { Socket } from 'socket.io';
@@ -10,62 +8,56 @@ import type { Unsubscribe } from '@anupheaus/common';
 const clientWatchSubscriptions = new WeakMap<Socket, Unsubscribe>();
 
 /**
- * §2.4 — Feed DB changes into the per-connection ServerToClientSynchronisation mirror.
- * When the mirror detects staleness (hash or lastAuditEntryId differs), it emits
- * mxdbServerToClientSyncAction to the client.
+ * §2.4 — Feed MongoDB change-stream events into the per-connection
+ * {@link ServerToClientSynchronisation}. The wrapper forwards events to the
+ * underlying {@link ServerDispatcher}, which handles filter bookkeeping,
+ * retry, and delivery.
+ *
+ * §10.1 — Tombstone filtering happens inside `s2c.onDbChange`, not here.
+ * This function passes all change events through verbatim; the S2C wrapper
+ * consults the auditor to drop any upserts whose audit shows a tombstoned
+ * record so that resurrection pushes never reach SD/CR.
  */
-export function addClientWatches(client: Socket, collections: MXDBCollection[], s2c: ServerToClientSynchronisation): void {
+export function addClientWatches(
+  client: Socket,
+  collections: MXDBCollection[],
+  s2c: ServerToClientSynchronisation,
+): void {
   const db = useDb();
-
   if (clientWatchSubscriptions.has(client)) return;
 
   clientWatchSubscriptions.set(client, db.onChange(async event => {
     const collection = collections.findBy('name', event.collectionName);
-    if (!collection) return;
-    const config = configRegistry.getOrError(collection);
+    if (collection == null) return;
     const watchLog = !is.browser() ? Logger.getCurrent()?.createSubLogger('clientDbWatches') : undefined;
 
-    switch (event.type) {
-      case 'insert': case 'update': {
-        watchLog?.debug('changeStream batch → S2C mirror (insert/update)', {
-          socketId: client.id,
-          collectionName: event.collectionName,
-          recordIds: event.records.ids(),
-          updatedAts: event.records.map(r => (r as { updatedAt?: number }).updatedAt),
-        });
-        const dbCollection = db.use(event.collectionName);
-        const changes = await Promise.all(event.records.map(async record => {
-          let lastAuditEntryId: string;
-          if (config.disableAudit === true) {
-            lastAuditEntryId = '';
-          } else {
-            const serverAudit = await dbCollection.getAudit(record.id);
-            lastAuditEntryId = serverAudit != null ? (auditor.getLastEntryId(serverAudit) ?? '') : '';
-          }
-          const recordHash = await hashRecord(record);
-          return { recordId: record.id, record, lastAuditEntryId, recordHash };
-        }));
-        await s2c.onDbChange(event.collectionName, changes);
-        break;
+    try {
+      switch (event.type) {
+        case 'insert':
+        case 'update': {
+          watchLog?.debug('changeStream batch → S2C (upsert)', {
+            socketId: client.id,
+            collectionName: event.collectionName,
+            recordIds: event.records.ids(),
+          });
+          await s2c.onDbChange({ type: 'upsert', collectionName: event.collectionName, records: event.records });
+          break;
+        }
+        case 'delete': {
+          watchLog?.debug('changeStream batch → S2C (delete)', {
+            socketId: client.id,
+            collectionName: event.collectionName,
+            recordIds: event.recordIds,
+          });
+          await s2c.onDbChange({ type: 'delete', collectionName: event.collectionName, recordIds: event.recordIds });
+          break;
+        }
       }
-      case 'delete': {
-        watchLog?.debug('changeStream batch → S2C mirror (delete)', {
-          socketId: client.id,
-          collectionName: event.collectionName,
-          recordIds: event.recordIds,
-        });
-        const dbCollection = db.use(event.collectionName);
-        const changes = await Promise.all(event.recordIds.map(async recordId => {
-          let lastAuditEntryId = '';
-          if (config.disableAudit !== true) {
-            const serverAudit = await dbCollection.getAudit(recordId);
-            lastAuditEntryId = serverAudit != null ? (auditor.getLastEntryId(serverAudit) ?? '') : '';
-          }
-          return { recordId, lastAuditEntryId, recordHash: '', deleted: true };
-        }));
-        await s2c.onDbChange(event.collectionName, changes);
-        break;
-      }
+    } catch (error) {
+      watchLog?.error('changeStream → S2C dispatch failed', {
+        collectionName: event.collectionName,
+        error: error as Record<string, unknown>,
+      });
     }
   }));
 }

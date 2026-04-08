@@ -1,4 +1,5 @@
 import { describe, it, expect, beforeEach } from 'vitest';
+import { Logger } from '@anupheaus/common';
 import { setDb, setServerToClientSync, useDb, useServerToClientSynchronisation } from './DbContext';
 import type { ServerDb } from './ServerDb';
 import { ServerToClientSynchronisation } from '../../ServerToClientSynchronisation';
@@ -8,7 +9,7 @@ describe('DbContext', () => {
 
   beforeEach(() => {
     setDb(fakeDb);
-    setServerToClientSync(ServerToClientSynchronisation.createNoOp([]));
+    setServerToClientSync(ServerToClientSynchronisation.createNoOp([], new Logger('test')));
   });
 
   it('useDb returns the db set by setDb', () => {

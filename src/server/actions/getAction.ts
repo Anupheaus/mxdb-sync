@@ -1,19 +1,17 @@
 import { createServerActionHandler } from '@anupheaus/socket-api/server';
 import { mxdbGetAction } from '../../common';
-import { configRegistry } from '../../common';
-import { useDb, useServerToClientSync } from '../providers';
+import { useDb, useServerToClientSynchronisation } from '../providers';
 
 export async function handleGet(params: { collectionName: string; ids: string[]; }) {
   const { collectionName, ids } = params;
   const db = useDb();
-  const { pushRecordsToClient } = useServerToClientSync();
+  const s2c = useServerToClientSynchronisation();
   const dbCollection = db.use(collectionName);
 
   const records = await dbCollection.get(ids);
   if (records == null || records.length === 0) return [];
 
-  const config = configRegistry.getOrError(dbCollection.collection);
-  await pushRecordsToClient(collectionName, records.ids(), [], config.disableAudit === true);
+  await s2c.seedActive(collectionName, records);
 
   return records.ids();
 }

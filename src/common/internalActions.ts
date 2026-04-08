@@ -1,23 +1,27 @@
 import { defineAction } from '@anupheaus/socket-api/common';
 import type {
-  ClientToServerSyncRequest,
-  ClientToServerSyncResponse,
   DistinctRequest,
   DistinctResponse,
   GetAllRequest,
   GetRequest,
   GetResponse,
-  MXDBServerToClientSyncPayload,
   QueryRequest,
   QueryResponse,
   ReconcileRequest,
   ReconcileResponse,
-  ServerToClientSyncAck,
 } from './models';
+import type {
+  ClientDispatcherRequest,
+  MXDBRecordCursors,
+  MXDBSyncEngineResponse,
+} from './sync-engine';
 
 // ─── Sync actions (C2S + S2C) ───────────────────────────────────────────────
-export const mxdbClientToServerSyncAction = defineAction<ClientToServerSyncRequest, ClientToServerSyncResponse>()('mxdbClientToServerSyncAction');
-export const mxdbServerToClientSyncAction = defineAction<MXDBServerToClientSyncPayload, ServerToClientSyncAck>()('mxdbServerToClientSyncAction');
+// These wire the four sync-engine components across the Socket.IO transport:
+//   CD  → mxdbClientToServerSyncAction → SR
+//   SD  → mxdbServerToClientSyncAction → CR
+export const mxdbClientToServerSyncAction = defineAction<ClientDispatcherRequest, MXDBSyncEngineResponse>()('mxdbClientToServerSyncAction');
+export const mxdbServerToClientSyncAction = defineAction<MXDBRecordCursors, MXDBSyncEngineResponse>()('mxdbServerToClientSyncAction');
 
 // ─── Reconcile (reconnect stale-record cleanup) ──────────────────────────────
 export const mxdbReconcileAction = defineAction<ReconcileRequest, ReconcileResponse>()('mxdbReconcileAction');

@@ -2,7 +2,7 @@ import { useLogger } from '@anupheaus/socket-api/server';
 import { mxdbGetAllSubscription } from '../../common';
 import { useCollection } from '../collections';
 import { useClient } from '../hooks';
-import { useServerToClientSync, useServerToClientSynchronisation } from '../providers';
+import { useServerToClientSynchronisation } from '../providers';
 import { createServerCollectionSubscription } from './createServerCollectionSubscription';
 import { pushSubscriptionResultRecords } from './pushSubscriptionResultRecords';
 
@@ -13,7 +13,6 @@ export const serverGetAllSubscription = createServerCollectionSubscription<strin
     const { collection, getAll, onChange, removeOnChange } = useCollection(collectionName);
     const { getData } = useClient();
     const capturedS2C = useServerToClientSynchronisation();
-    const { pushRecordsToClient } = useServerToClientSync();
     logger.always('getAllSubscription setup', { subscriptionId, collectionName, capturedIsNoOp: capturedS2C.isNoOp });
 
     async function pushCurrentSnapshot(): Promise<string[]> {
@@ -21,7 +20,7 @@ export const serverGetAllSubscription = createServerCollectionSubscription<strin
       const records = await getAll();
       const newRecordIds = records.ids();
       const removedIds = priorIds.filter(id => !newRecordIds.includes(id));
-      await pushSubscriptionResultRecords(collection, records, removedIds, pushRecordsToClient);
+      await pushSubscriptionResultRecords(capturedS2C, collection, records, removedIds);
       updateAdditionalData(newRecordIds);
       return newRecordIds;
     }

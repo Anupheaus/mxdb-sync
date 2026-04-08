@@ -59,7 +59,8 @@ export async function startAuthenticatedServer({
       const { impersonateUser } = useSocketAPI();
 
       await impersonateUser(adminUser, async () => {
-        setServerToClientSync(ServerToClientSynchronisation.createNoOp(collections));
+        const startupLogger = (logger ?? Logger.getCurrent() ?? new Logger('mxdb-sync')).createSubLogger('s2c:startup');
+        setServerToClientSync(ServerToClientSynchronisation.createNoOp(collections, startupLogger));
         const startTime = Date.now();
         if (shouldSeedCollections === true) await seedCollections(collections);
         console.log(`Seeding took ${Date.now() - startTime}ms`); // eslint-disable-line no-console
@@ -113,7 +114,7 @@ export async function startAuthenticatedServer({
         const s2cLogger = (logger ?? Logger.getCurrent() ?? new Logger('mxdb-sync')).createSubLogger(`s2c:${client.id}`);
         const emitS2C = useAction(mxdbServerToClientSyncAction);
         const s2c = new ServerToClientSynchronisation({
-          emitS2C: async payload => await emitS2C(payload),
+          emitS2C: async payload => emitS2C(payload),
           getDb: () => db,
           collections,
           logger: s2cLogger,

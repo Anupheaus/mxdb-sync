@@ -1,2 +1,2 @@
 export * from './ServerToClientProvider';
-export * from './useClientToServerSync';
+export * from './ClientReceiverContext';

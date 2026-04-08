@@ -13,12 +13,7 @@ export const setServerToClientSync = ctx.setServerToClientSync;
 
 const useServerToClientSyncContext = ctx.useServerToClientSync;
 
-/** Full per-connection synchronisation instance (seed mirror, change stream, close, etc.). */
+/** Per-connection S2C synchronisation wrapper exposed to action handlers via async context. */
 export function useServerToClientSynchronisation(): ServerToClientSynchronisation {
   return useServerToClientSyncContext();
-}
-
-/** Destructure `pushRecordsToClient` for fan-out; implementation is bound on the class instance. */
-export function useServerToClientSync(): Pick<ServerToClientSynchronisation, 'pushRecordsToClient'> {
-  return { pushRecordsToClient: useServerToClientSyncContext().pushRecordsToClient };
 }

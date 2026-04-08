@@ -6,35 +6,23 @@ function withIds<T extends { id: string }>(items: T[]): T[] & { ids: () => strin
 }
 
 const mockUseDb = vi.fn();
-const mockUseServerToClientSync = vi.fn();
-const mockConfigRegistryGetOrError = vi.fn();
+const mockUseServerToClientSynchronisation = vi.fn();
 
 vi.mock('../providers', () => ({
   useDb: () => mockUseDb(),
-  useServerToClientSync: () => mockUseServerToClientSync(),
+  useServerToClientSynchronisation: () => mockUseServerToClientSynchronisation(),
 }));
-vi.mock('../../common', async importOriginal => {
-  const actual = await importOriginal() as object;
-  return {
-    ...actual,
-    configRegistry: {
-      ...(actual as any).configRegistry,
-      getOrError: (...args: unknown[]) => mockConfigRegistryGetOrError(...args),
-    },
-  };
-});
 
 describe('handleQuery', () => {
   const collection = { name: 'items' };
   const mockQuery = vi.fn();
   const mockDbCollection = { collection, query: mockQuery };
-  const mockPushRecordsToClient = vi.fn();
+  const mockSeedActive = vi.fn();
 
   beforeEach(() => {
     vi.clearAllMocks();
     mockUseDb.mockReturnValue({ use: () => mockDbCollection });
-    mockUseServerToClientSync.mockReturnValue({ pushRecordsToClient: mockPushRecordsToClient });
-    mockConfigRegistryGetOrError.mockReturnValue({ disableAudit: false });
+    mockUseServerToClientSynchronisation.mockReturnValue({ seedActive: mockSeedActive });
   });
 
   it('returns empty array when query returns no records', async () => {
@@ -43,26 +31,18 @@ describe('handleQuery', () => {
     expect(result).toEqual([]);
   });
 
-  it('calls pushRecordsToClient and returns total', async () => {
+  it('calls seedActive and returns total', async () => {
     const records = withIds([{ id: '1', name: 'a' }]);
     mockQuery.mockResolvedValue({ data: records, total: 1 });
     const result = await handleQuery({ collectionName: 'items' });
-    expect(mockPushRecordsToClient).toHaveBeenCalledWith('items', ['1'], [], false);
+    expect(mockSeedActive).toHaveBeenCalledWith('items', records);
     expect(result).toBe(1);
   });
 
-  it('passes disableAudit true for audit-free collections', async () => {
-    mockConfigRegistryGetOrError.mockReturnValue({ disableAudit: true });
-    const records = withIds([{ id: '1' }]);
-    mockQuery.mockResolvedValue({ data: records, total: 1 });
-    await handleQuery({ collectionName: 'items' });
-    expect(mockPushRecordsToClient).toHaveBeenCalledWith('items', ['1'], [], true);
-  });
-
-  it('does not call configRegistry when no records returned', async () => {
+  it('does not call seedActive when no records returned', async () => {
     mockQuery.mockResolvedValue({ data: [], total: 0 });
     await handleQuery({ collectionName: 'items' });
-    expect(mockConfigRegistryGetOrError).not.toHaveBeenCalled();
+    expect(mockSeedActive).not.toHaveBeenCalled();
   });
 
   it('passes extra query parameters to dbCollection.query', async () => {

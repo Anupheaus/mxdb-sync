@@ -1,26 +1,27 @@
 import type { Record } from '@anupheaus/common';
-import { configRegistry, type MXDBCollection } from '../../common';
-import { useServerToClientSync } from '../providers';
-
-type PushFn = (collectionName: string, updatedRecordIds: string[], removedRecordIds: string[], disableAudit: boolean) => Promise<void>;
+import type { MXDBCollection } from '../../common';
+import type { ServerToClientSynchronisation } from '../ServerToClientSynchronisation';
 
 /**
- * After a subscription snapshot, reconcile the client via the S2C sync action (stale mirror rows only).
+ * After a subscription snapshot, seed the S2C filter for the query result
+ * records and push any stale deletions to the client.
  *
- * @param pushFn — pre-captured `pushRecordsToClient` from subscription setup time. Required when called
- *   from an `onChange` callback triggered by MongoDB change stream events, because those callbacks run
- *   outside any ALS context and `useServerToClientSync()` would fall back to the server-startup no-op instance.
+ * The caller MUST pass the {@link ServerToClientSynchronisation} instance captured
+ * at subscription setup time, because `onChange` callbacks fire from the MongoDB
+ * change stream outside any ALS context — a late `useServerToClientSynchronisation()`
+ * would fall back to the server-startup no-op instance.
  */
 export async function pushSubscriptionResultRecords<RecordType extends Record>(
+  s2c: ServerToClientSynchronisation,
   collection: MXDBCollection<RecordType>,
   records: RecordType[],
   removedIds: string[] = [],
-  pushFn?: PushFn,
 ): Promise<void> {
-  const ids = records.ids();
-  if (ids.length === 0 && removedIds.length === 0) return;
-
-  const config = configRegistry.getOrError(collection);
-  const push = pushFn ?? useServerToClientSync().pushRecordsToClient;
-  await push(collection.name, ids, removedIds, config.disableAudit === true);
+  if (records.length === 0 && removedIds.length === 0) return;
+  if (records.length > 0) {
+    await s2c.seedActive(collection.name, records);
+  }
+  if (removedIds.length > 0) {
+    await s2c.pushDeletes(collection.name, removedIds);
+  }
 }

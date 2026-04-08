@@ -22,6 +22,6 @@ export function provideDb<R>(
   });
 
   setDb(db);
-  setServerToClientSync(ServerToClientSynchronisation.createNoOp(collections));
+  setServerToClientSync(ServerToClientSynchronisation.createNoOp(collections, logger.createSubLogger('s2c:noop')));
   return delegate(db);
 }

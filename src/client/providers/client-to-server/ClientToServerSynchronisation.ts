@@ -239,6 +239,14 @@ export class ClientToServerSynchronisation {
   }
 
   /**
+   * True if the record is currently in the debounced C2S queue (awaiting or mid-flush snapshot).
+   * Used by S2C to validate that `auditor.hasPendingChanges` correlates with an enqueued flush.
+   */
+  hasQueuedPendingForRecord(collectionName: string, recordId: string): boolean {
+    return this.#queue.has(`${collectionName}::${recordId}`);
+  }
+
+  /**
    * Register a listener that fires whenever the sync-in-progress state changes.
    * Returns an unsubscribe function.
    */

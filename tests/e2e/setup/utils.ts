@@ -3,6 +3,7 @@ import { decodeTime } from 'ulidx';
 import { entriesOf, type AuditEntryType, type ServerAuditOf } from '../../../src/common/auditor';
 import type { E2EClientHandle } from './context';
 import { useServer } from './context';
+import type { E2eTestRecord } from './types';
 
 /**
  * Poll until `predicate()` resolves true or `timeoutMs` elapses.
@@ -24,7 +25,7 @@ export async function waitUntilAsync(
 }
 
 /**
- * Poll Mongo (via {@link useServer}) until no live `syncTest` row exists for `recordId`.
+ * Poll Mongo (via {@link useServer}) until no live row exists for `recordId` in the default fixture collection.
  * Requires active e2e context.
  */
 export async function waitForLiveRecordAbsent(
@@ -47,6 +48,8 @@ export interface WaitForAllClientsIdleOptions {
   /** Consecutive idle polls required before resolving (default `8`). */
   stableTicksRequired?: number;
   pollMs?: number;
+  /** When `true`, also require every client to report `getIsConnected()` (default `false`). */
+  requireConnected?: boolean;
 }
 
 /**
@@ -60,12 +63,14 @@ export async function waitForAllClientsIdle(
   const timeoutMs = options?.timeoutMs ?? 90_000;
   const stableTicksRequired = options?.stableTicksRequired ?? 8;
   const pollMs = options?.pollMs ?? 100;
+  const requireConnected = options?.requireConnected ?? false;
   const deadline = Date.now() + timeoutMs;
   let stableTicks = 0;
   while (Date.now() < deadline) {
     const idle = clients.every(
       c =>
-        !c.getIsSynchronising()
+        (!requireConnected || c.getIsConnected())
+        && !c.getIsSynchronising()
         && c.getPendingC2SSyncQueueSize() === 0,
     );
     if (idle) {
@@ -77,6 +82,29 @@ export async function waitForAllClientsIdle(
     await new Promise<void>(r => setTimeout(r, pollMs));
   }
   throw new Error('waitForAllClientsIdle: timeout');
+}
+
+/**
+ * Poll a client's local SQLite store until a record with `id` is present (or timeout).
+ * Use after operations where S2C push timing is uncertain — `waitForAllClientsIdle` only
+ * checks C2S queue state; the server's async push to the client may not have landed yet.
+ */
+export async function waitForClientRecord(
+  client: E2EClientHandle,
+  id: string,
+  label = `client local record "${id}"`,
+  timeoutMs = 30_000,
+): Promise<E2eTestRecord> {
+  let record: E2eTestRecord | undefined;
+  await waitUntilAsync(
+    async () => {
+      record = await client.getLocalRecord(id);
+      return record != null;
+    },
+    label,
+    timeoutMs,
+  );
+  return record!;
 }
 
 /**

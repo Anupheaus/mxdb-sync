@@ -47,6 +47,7 @@ export class ServerToClientSynchronisation {
     this.#logger = props.logger;
     this.#mirror = new Map();
     this.#s2cInFlight = false;
+    this.#emitQueue = Promise.resolve();
     this.#pendingMirrorQueue = [];
     this.#pendingCatchUp = true;
     this.#closed = false;
@@ -83,6 +84,9 @@ export class ServerToClientSynchronisation {
   /** Whether an S2C emit is currently awaiting its ack. */
   #s2cInFlight: boolean;
 
+  /** Serial queue for #emitS2CPayload — ensures only one S2C round is in flight at a time. */
+  #emitQueue: Promise<void>;
+
   /** C2S mirror seeds buffered while S2C is in flight (section 2.6). */
   #pendingMirrorQueue: PendingMirrorEntry[];
 
@@ -93,6 +97,9 @@ export class ServerToClientSynchronisation {
   #closed: boolean;
 
   // ── Public API ───────────────────────────────────────────────────────────
+
+  /** True when this is the server-startup no-op instance (never emits). */
+  get isNoOp(): boolean { return this.#noOp; }
 
   /**
    * Seed the mirror from a `mxdbClientToServerSyncAction` batch (section 2.3).
@@ -119,6 +126,14 @@ export class ServerToClientSynchronisation {
       for (const entry of updates) {
         this.#applyMirrorEntry(entry.collectionName, entry.recordId, entry.recordHash, entry.lastAuditEntryId);
       }
+      // If a catch-up is pending (first C2S after reconnect), schedule it now so any stale
+      // (updated-but-not-deleted) records are pushed to the client. Deletions are handled by
+      // pushRecordsToClient; updates with no corresponding C2S push would otherwise be missed.
+      if (this.#pendingCatchUp) {
+        void this.catchUp().catch(error => {
+          this.#logger?.error('Catch-up after seedFromC2S failed', { error });
+        });
+      }
     }
   }
 
@@ -142,11 +157,24 @@ export class ServerToClientSynchronisation {
     if (this.#noOp || this.#closed) return;
     if (!this.#collectionNames.has(collectionName)) return;
 
-    if (this.#mirror.get(collectionName) == null) return;
+    if (this.#mirror.get(collectionName) == null) {
+      const deletedIds = changes.filter(c => c.deleted).map(c => c.recordId);
+      if (deletedIds.length > 0) {
+        this.#logger?.debug('[s2c-conv] onDbChange: dropping delete — no collection mirror for this client', {
+          collectionName, deletedIds,
+        });
+      }
+      return;
+    }
 
     const { updates, deletions } = this.#filterChangesToS2CLists(collectionName, changes, false);
     if (updates.length === 0 && deletions.length === 0) return;
 
+    this.#logger?.debug('[s2c-conv] onDbChange: emitting S2C payload', {
+      collectionName,
+      updateIds: updates.map(u => u.record.id),
+      deletionIds: deletions.map(d => d.recordId),
+    });
     await this.#emitS2CPayload([{ collectionName, updates, deletions }]);
   }
 
@@ -185,9 +213,14 @@ export class ServerToClientSynchronisation {
         const serverRecord = await collection.get(recordId);
         if (serverRecord == null) continue;
         let lastAuditEntryId = '';
+        const serverAudit = await collection.getAudit(recordId);
         if (!disableAudit) {
-          const serverAudit = await collection.getAudit(recordId);
           lastAuditEntryId = serverAudit != null ? (auditor.getLastEntryId(serverAudit) ?? '') : '';
+        }
+        // Split-brain guard: if audit says deleted, route to deletion instead of update.
+        if (serverAudit != null && auditor.isDeleted(serverAudit)) {
+          changes.push({ recordId, lastAuditEntryId, recordHash: '', deleted: true });
+          continue;
         }
         const recordHash = await hashRecord(serverRecord);
         changes.push({ recordId, record: serverRecord, lastAuditEntryId, recordHash });
@@ -214,13 +247,22 @@ export class ServerToClientSynchronisation {
     const { updates, deletions } = this.#filterChangesToS2CLists(collectionName, changes, true);
     if (updates.length === 0 && deletions.length === 0) return;
 
-    // Pre-set mirror rows for every update we are about to send.
-    // Without this, any deletion that arrives from the change stream while the
-    // S2C round-trip is in flight would see mirrorRow == null and be silently
-    // dropped by #filterChangesToS2CLists / onDbChange.
+    this.#logger?.debug('[s2c-conv] pushRecordsToClient: emitting S2C payload', {
+      collectionName,
+      updateIds: updates.map(u => u.record.id),
+      deletionIds: deletions.map(d => d.recordId),
+    });
+
+    // Pre-set mirror rows only for records with NO existing mirror entry (genuinely new records).
+    // This prevents a concurrent changeStream update for a brand-new record from being silently
+    // dropped by the mirrorRow == null check in #filterChangesToS2CLists / onDbChange.
+    // We must NOT pre-set existing records: if the client drops the S2C (e.g. hasPendingChanges),
+    // the mirror must retain the old value so the next pushRecordsToClient call detects the
+    // discrepancy (mirror != server) and re-delivers the update.
     const collectionMirror = this.#mirror.get(collectionName)!;
     const changeByRecordId = new Map(changes.filter(c => !c.deleted).map(c => [c.recordId, c]));
     for (const update of updates) {
+      if (collectionMirror.has(update.record.id)) continue;
       const change = changeByRecordId.get(update.record.id);
       if (change != null) collectionMirror.set(update.record.id, { recordHash: change.recordHash, lastAuditEntryId: change.lastAuditEntryId });
     }
@@ -274,6 +316,16 @@ export class ServerToClientSynchronisation {
               if (lastEntryId != null && (mirrorRow.lastAuditEntryId !== lastEntryId || mirrorRow.recordHash !== '')) {
                 deletions.push({ recordId, lastAuditEntryId: lastEntryId });
               }
+            }
+            continue;
+          }
+
+          // Split-brain guard: serverRecord was read before a concurrent deletion committed,
+          // serverAudit was read after — audit is the source of truth.
+          if (serverAudit != null && auditor.isDeleted(serverAudit)) {
+            const lastEntryId = auditor.getLastEntryId(serverAudit);
+            if (lastEntryId != null && (mirrorRow.lastAuditEntryId !== lastEntryId || mirrorRow.recordHash !== '')) {
+              deletions.push({ recordId, lastAuditEntryId: lastEntryId });
             }
             continue;
           }
@@ -361,6 +413,10 @@ export class ServerToClientSynchronisation {
       if (mirrorRow == null) {
         if (includeUpdatesWhenMirrorMissing) {
           updates.push({ record: change.record, lastAuditEntryId: change.lastAuditEntryId });
+        } else {
+          this.#logger?.debug('[s2c-conv] filterChanges: dropping update — no mirror row for this record (client has not seeded it yet)', {
+            collectionName, recordId: change.recordId,
+          });
         }
         continue;
       }
@@ -392,36 +448,43 @@ export class ServerToClientSynchronisation {
   }
 
   /**
-   * Emit an S2C payload to the client and process the ack (section 2.6 / section 6).
-   *
-   * Sets the in-flight flag before emit, processes the ack (deletions remove
-   * mirror rows, successes refresh from current server state, omissions leave
-   * mirror unchanged), drains the pending mirror queue, and clears in-flight.
-   *
-   * If the emit fails while the connection is still open, schedules a
-   * catch-up style recovery (section 2.7).
+   * Enqueue an S2C payload emit. Serialises all emits via #emitQueue so only
+   * one S2C round is ever in-flight at a time (section 2.6).
    */
-  async #emitS2CPayload(payload: MXDBServerToClientSyncPayload): Promise<void> {
+  #emitS2CPayload(payload: MXDBServerToClientSyncPayload): Promise<void> {
+    if (this.#noOp || this.#closed || this.#emitS2C == null) return Promise.resolve();
+    this.#emitQueue = this.#emitQueue.then(() => this.#doEmitS2C(payload));
+    return this.#emitQueue;
+  }
+
+  /**
+   * Inner emit — runs serially via #emitQueue. Processes the ack (deletions
+   * remove mirror rows, successes refresh from current server state, omissions
+   * leave mirror unchanged), drains the pending mirror queue, and clears in-flight.
+   *
+   * If the emit fails while still connected, schedules catch-up recovery (section 2.7).
+   */
+  async #doEmitS2C(payload: MXDBServerToClientSyncPayload): Promise<void> {
     if (this.#noOp || this.#closed || this.#emitS2C == null) return;
 
     this.#s2cInFlight = true;
 
     try {
       const ack = await this.#emitS2C(payload);
-      await this.#processAck(ack);
+      await this.#processAck(ack, payload);
     } catch (error) {
       this.#logger?.error('S2C emit failed', { error });
 
-      // Section 2.7: if still connected (not closed), attempt catch-up recovery
+      // Section 2.7: if still connected (not closed), attempt catch-up recovery.
+      // Fire-and-forget: catchUp enqueues onto #emitQueue, so we must not await it
+      // from within #doEmitS2C (which itself runs on #emitQueue) to avoid a deadlock.
       if (!this.#closed) {
         this.#s2cInFlight = false;
         this.#drainPendingMirrorQueue();
         this.#pendingCatchUp = true;
-        try {
-          await this.catchUp();
-        } catch (catchUpError) {
+        void this.catchUp().catch(catchUpError => {
           this.#logger?.error('S2C catch-up recovery also failed', { error: catchUpError });
-        }
+        });
         return;
       }
     }
@@ -429,13 +492,13 @@ export class ServerToClientSynchronisation {
     this.#drainPendingMirrorQueue();
     this.#s2cInFlight = false;
 
-    // If catch-up was deferred while S2C was in flight, run it now
+    // If catch-up was deferred while S2C was in flight, run it now.
+    // Fire-and-forget for the same reason as above: catchUp enqueues onto #emitQueue,
+    // so awaiting it here (inside a #emitQueue task) would deadlock.
     if (this.#pendingCatchUp && !this.#closed) {
-      try {
-        await this.catchUp();
-      } catch (error) {
+      void this.catchUp().catch(error => {
         this.#logger?.error('Deferred catch-up failed', { error });
-      }
+      });
     }
   }
 
@@ -446,7 +509,7 @@ export class ServerToClientSynchronisation {
    * - `successfulRecordIds`: refresh mirror row from current server DB state.
    * - Omitted ids: leave mirror unchanged.
    */
-  async #processAck(ack: ServerToClientSyncAck): Promise<void> {
+  async #processAck(ack: ServerToClientSyncAck, payload: MXDBServerToClientSyncPayload): Promise<void> {
     const db = this.#getDb?.();
     if (db == null) return;
 
@@ -459,10 +522,21 @@ export class ServerToClientSynchronisation {
         collectionMirror.delete(recordId);
       }
 
-      // Section 6.2: successfulRecordIds -> refresh mirror from current server state
+      // Section 6.2: successfulRecordIds -> set mirror to SENT state, schedule catch-up if server advanced.
+      // We intentionally mirror what was *sent* (not current server state) so that future onDbChange
+      // comparisons detect any server changes that happened between emit and ack.
       if (item.successfulRecordIds.length > 0) {
         const collection = db.use(item.collectionName);
         if (collection == null) continue;
+
+        // Build a lookup of what was sent in this payload for quick access.
+        const sentPayloadItem = payload.find(p => p.collectionName === item.collectionName);
+        const sentUpdateMap = new Map<string, { record: Record; lastAuditEntryId: string }>();
+        if (sentPayloadItem != null) {
+          for (const u of sentPayloadItem.updates) {
+            sentUpdateMap.set(u.record.id, { record: u.record, lastAuditEntryId: u.lastAuditEntryId });
+          }
+        }
 
         for (const recordId of item.successfulRecordIds) {
           try {
@@ -470,24 +544,42 @@ export class ServerToClientSynchronisation {
             const serverAudit = await collection.getAudit(recordId);
 
             if (serverRecord == null) {
-              // Record was deleted between emit and ack. Do NOT clear the mirror row —
-              // leaving it stale allows catchUp() or the next clientDbWatches delete
-              // event to detect the discrepancy and deliver the deletion to the client.
+              // Record was deleted between emit and ack (e.g. a stale resurrection push arrived
+              // after a deletion was already committed). Do NOT clear the mirror row — leaving
+              // it stale lets catchUp() detect the discrepancy and re-deliver the deletion.
+              this.#pendingCatchUp = true;
               continue;
             }
 
-            const serverHash = await hashRecord(serverRecord);
             const serverLastEntryId = serverAudit != null ? auditor.getLastEntryId(serverAudit) : undefined;
 
-            if (serverLastEntryId != null) {
-              collectionMirror.set(recordId, { recordHash: serverHash, lastAuditEntryId: serverLastEntryId });
-            } else {
-              // Audit-free collection: update hash, keep existing lastAuditEntryId
-              const existing = collectionMirror.get(recordId);
+            const sentUpdate = sentUpdateMap.get(recordId);
+            if (sentUpdate != null) {
+              // Set mirror to what was actually sent, so future onDbChange diffs are relative
+              // to the client's current state (not a potentially newer server state).
+              const sentHash = await hashRecord(sentUpdate.record);
               collectionMirror.set(recordId, {
-                recordHash: serverHash,
-                lastAuditEntryId: existing?.lastAuditEntryId ?? '',
+                recordHash: sentHash,
+                lastAuditEntryId: sentUpdate.lastAuditEntryId,
               });
+              // If the server has moved on since we sent, schedule a catch-up so the client
+              // receives the newer state.
+              if (serverLastEntryId != null && serverLastEntryId !== sentUpdate.lastAuditEntryId) {
+                this.#pendingCatchUp = true;
+              }
+            } else {
+              // Sent via pushRecordsToClient (not this payload) — fall back to current server state.
+              const serverHash = await hashRecord(serverRecord);
+              if (serverLastEntryId != null) {
+                collectionMirror.set(recordId, { recordHash: serverHash, lastAuditEntryId: serverLastEntryId });
+              } else {
+                // Audit-free collection: update hash, keep existing lastAuditEntryId
+                const existing = collectionMirror.get(recordId);
+                collectionMirror.set(recordId, {
+                  recordHash: serverHash,
+                  lastAuditEntryId: existing?.lastAuditEntryId ?? '',
+                });
+              }
             }
           } catch (error) {
             this.#logger?.error('Failed to refresh mirror row after ack', {
@@ -497,6 +589,21 @@ export class ServerToClientSynchronisation {
             });
           }
         }
+      }
+
+      // Section 6.3: detect silently-deferred deletions.
+      // If the client deferred a deletion (hasPendingChanges=true at the time), it will be
+      // absent from deletedRecordIds. Schedule a catchUp so the deletion is re-delivered once
+      // the client's collapseAudit finishes and hasPendingChanges becomes false.
+      const sentDeletionIds = payload.find(p => p.collectionName === item.collectionName)?.deletions.map(d => d.recordId) ?? [];
+      const ackedDeletionIds = new Set(item.deletedRecordIds);
+      const unansweredDeletions = sentDeletionIds.filter(id => !ackedDeletionIds.has(id));
+      if (unansweredDeletions.length > 0) {
+        this.#logger?.debug('S2C deletions deferred by client — scheduling catch-up', {
+          collectionName: item.collectionName,
+          unansweredDeletions,
+        });
+        this.#pendingCatchUp = true;
       }
     }
   }

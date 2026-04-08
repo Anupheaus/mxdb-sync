@@ -1,14 +1,36 @@
-# E2E test setup — public API
+# E2E setup — generic infrastructure
 
-Import everything from the barrel:
+This folder holds **shared end-to-end test infrastructure** only: browser fakes, Mongo + HTTPS server lifecycle, the React/SQLite sync client harness, run logging, and **generic** waits/helpers that any e2e spec can import.
+
+**What does *not* belong here:** anything tied to a particular suite, feature area, or scenario. Helpers, fixtures, extra config, harness state, or assertions that exist to serve **one** test file or **one** subfolder under `tests/e2e/` should live **next to those tests** (same folder or a sibling `utils.ts` / `fixtures/` under that area). Examples today: stress workload harnesses under `tests/e2e/stress/`; top-level specs like `deletions.e2e.test.ts` stay thin and import from `./setup` for shared plumbing only.
+
+**Rule of thumb:** if removing a test folder would make a setup file unused or meaningless, that code probably belongs **inside** that folder, not in `setup/`. New `tests/e2e/<area>/` trees should follow the same pattern.
+
+See also **`tests/e2e/README.md`** for how the e2e tree is organized.
+
+---
+
+## Public API (barrel)
+
+Import from `tests/e2e/setup` (or a relative `./setup` from other files under `tests/e2e/`):
 
 ```ts
 import {
   installBrowserEnvironment,
-  clearSyncTestCollections,
+  e2eTestCollection,
+  type E2eTestRecord,
+  type E2eTestMetadata,
+  type RunLogEvent,
+  type RunLogDetail,
+  type RunLogger,
+  E2E_MONGO_DB_NAME,
+  clearLiveAndAuditCollections,
+  clearE2eTestCollections,
+  type ClearLiveAndAuditOptions,
   e2eNoopRunLogger,
   e2eForwardingRunLogger,
-  createE2eRunLogger,
+  createRunLogger,
+  type CreateRunLoggerOptions,
   getE2eRunLogger,
   setE2eRunLogger,
   setupE2E,
@@ -16,6 +38,7 @@ import {
   teardownE2E,
   useClient,
   useServer,
+  useRunLogger,
   waitUntilAsync,
   waitForLiveRecordAbsent,
   waitForAllClientsIdle,
@@ -24,32 +47,53 @@ import {
   type E2EServerAccess,
   type SetupE2EOptions,
   type WaitForAllClientsIdleOptions,
-} from './setup'; // or `tests/e2e/setup` from another file under `tests/e2e/`
+  createSyncClient,
+  type SyncClient,
+  readServerRecords,
+  type ReadServerRecordsOptions,
+  readServerAuditDocuments,
+  type ReadServerAuditDocumentsOptions,
+  formatServerLogDetail,
+  condenseServerLogDetail,
+  startLifecycle,
+  startMongo,
+  startServerInstance,
+  setServerLogCallback,
+  stopLifecycle,
+  type LifecycleState,
+  type ServerInstance,
+  vitestE2eTlsEnv,
+  condenseAppLoggerDetail,
+  type AppLoggerRunLogDetail,
+} from './setup';
 ```
 
-**Vitest:** `vitest.e2e.config.ts` uses `setupFiles` in this order: `e2eVitestSetup.ts` (hoisted `vi.mock('@anupheaus/common')` for `app_logger` capture + longer action timeout, same idea as sync-test), then `vitestGlobals.ts` (`installBrowserEnvironment`). Call `setupE2E()` in `beforeAll` to start Mongo + server and open a run log file under `tests/e2e/logs/e2e-{timestamp}.log` (nanosecond lines, `server_log` / `app_logger` condensed like `tests/sync-test/runLogger.ts`). `test.env` sets TLS for forked workers (see `tests/sync-test/vitestTlsEnv.ts`). Run with `pnpm test:e2e`.
+Most tests only need a subset: `setupE2E`, `resetE2E`, `teardownE2E`, `useClient`, `useServer`, and the wait helpers.
+
+**Vitest:** `vitest.e2e.config.ts` sets `test.env` from `vitestE2eTlsEnv(__dirname)` (trusts the local CA via `preload-tls.cjs` + `certs/ca.crt`) and `setupFiles`: `e2eVitestSetup.ts` then `vitestGlobals.ts` (`installBrowserEnvironment`). Run with `pnpm test:e2e`. Logs default to `tests/e2e/logs/{prefix}-{timestamp}.log` (nanosecond-prefixed lines; `server_log` / `app_logger` entries condensed).
 
 ---
 
-## Functions
+## Lifecycle
 
 ### `installBrowserEnvironment(): void`
 
-Installs browser-like globals in Node: `fake-indexeddb`, JSDOM (`window` / `document`), `self`, and a minimal `URL.createObjectURL` if missing. Idempotent (safe to call multiple times). Also sets `process.env.MXDB_DIAG_FILE` to a file under `tests/sync-test/logs/` when unset.
+Installs browser-like globals in Node: `fake-indexeddb`, JSDOM (`window` / `document`), `self`, and a stub `URL.createObjectURL` if missing. **Idempotent** (guarded by `globalThis.__mxdbE2eBrowserInstalled`).
 
-`setupE2E()` calls this internally; use standalone only if you need globals before `setupE2E` without Vitest `setupFiles`.
+`setupE2E()` calls this internally. Vitest loads it again via `vitestGlobals.ts` so globals exist before test modules import client code.
 
 ---
 
 ### `setupE2E(options?: SetupE2EOptions): Promise<void>`
 
-**Call in `beforeAll`.** Ensures browser environment, temporarily removes `global.window` / `document` while starting infrastructure (same pattern as the sync integration test), then:
+**Call in `beforeAll`.** Ensures browser environment, temporarily removes `global.window` / `document` while starting infrastructure (avoids the server process treating the worker as a browser), then:
 
-1. Creates `tests/e2e/logs/e2e-{iso}.log`, registers `setE2eRunLogger` + `setServerLogCallback` (forked server stdout/stderr → `server_log` lines).
-2. Starts MongoDB Memory ReplSet (if needed) and forks the HTTPS sync server (`tests/sync-test/serverProcess.cjs` + `syncTest` collection).
-3. Unless `skipInitialMongoClear` is set, clears `syncTest` and `syncTest_sync` in `mxdb-sync-test`.
+1. Creates a run log via `createRunLogger` (defaults under `tests/e2e/logs/`, prefix `e2e`; override with `options.runLoggerOptions`).
+2. Registers `setE2eRunLogger` and `setServerLogCallback` so the forked server’s stdout/stderr become `server_log` lines in that file.
+3. Starts MongoDB Memory **ReplSet** and forks the HTTPS sync server (`serverProcess.cjs` in this folder), registering the default `e2eTest` collection (`e2eTestFixture.ts`, re-exported from `types.ts`).
+4. Unless `skipInitialMongoClear` is set, clears `e2eTest` and `e2eTest_sync` in database `E2E_MONGO_DB_NAME` (`mongoConstants.ts`, default `mxdb-e2e`). Client and server use socket name `E2E_SOCKET_API_NAME` (`mxdb-e2e`); the forked child reads `MXDB_E2E_*` env vars (`E2E_SERVER_PROCESS_ENV`).
 
-`useClient` wires `createSyncClient` to `e2eForwardingRunLogger` so socket/client harness events append to the same file.
+`useClient` wires `createSyncClient` to `e2eForwardingRunLogger` so client/socket events go to the same log.
 
 Throws if `setupE2E` was already called in this worker without `teardownE2E()`.
 
@@ -57,163 +101,146 @@ Throws if `setupE2E` was already called in this worker without `teardownE2E()`.
 
 ### `resetE2E(): Promise<void>`
 
-**Call in `beforeEach` for isolated tests.** Unmounts every client created via `useClient`, closes each client DB via `dbs.close`, clears the client registry, and runs `clearSyncTestCollections` on the current Mongo URI.
+**Call in `beforeEach` for isolated tests.** Unmounts every `useClient` client, closes each client DB (`dbs.close`), clears the client map, and runs `clearE2eTestCollections` on the current Mongo URI.
 
-After reset, the next `useClient('sameLabel')` builds a **new** React client and SQLite-backed DB (`e2e-client-{label}`).
+After reset, the next `useClient('sameLabel')` is a **new** React tree and DB (`e2e-client-{label}`).
 
 ---
 
 ### `teardownE2E(): Promise<void>`
 
-**Call in `afterAll`.** Unmounts/closes all clients, then `stopLifecycle(true)` (stops server child + Mongo Memory Server), clears server log callback and `setE2eRunLogger(undefined)`, closes the run log stream. No-op if `setupE2E` never ran or context was already torn down.
+**Call in `afterAll`.** Unmounts/closes all clients, `stopLifecycle(true)` (server child + Mongo), clears server log callback and `setE2eRunLogger(undefined)`, closes the log stream. No-op if setup never ran.
 
 ---
 
 ### `useClient(label: string): E2EClientHandle`
 
-**Requires `setupE2E()` to have completed.** Returns a named client; creates it on first use for that `label` in the current context. Empty `label` throws.
+**Requires active context after `setupE2E()`.** Named client; created on first use per `label`. Empty `label` throws. Logging id `e2e-{label}`, IndexedDB/SQLite DB name `e2e-client-{label}`.
 
-Internal details (useful for debugging): logging id `e2e-{label}`, DbsProvider / DB name `e2e-client-{label}`.
+`connect(host?: string)` — if `host` is omitted, uses `useServer().socketHost` (`localhost:${port}`).
 
 ---
 
 ### `useServer(): E2EServerAccess`
 
-**Requires `setupE2E()` to have completed.** Returns a fresh object each call; all methods use the active lifecycle (same Mongo URI and port).
+Fresh object each call; same underlying lifecycle (Mongo URI, port, child process).
+
+| Member | Description |
+|--------|-------------|
+| `mongoUri` | Memory ReplSet connection string. |
+| `port` | HTTPS listen port. |
+| `socketHost` | Host **without** protocol, e.g. `localhost:12345` (client builds `wss://`). |
+| `stopServer()` | Stops only the server child. |
+| `restartServer()` | Stop, brief wait (`SERVER_RESTART_WAIT_MS`), respawn on same port. |
+| `readLiveRecords()` | All `e2eTest` documents as `E2eTestRecord[]`. |
+| `readAudits(liveCollectionName?)` | Map id → `ServerAuditOf<E2eTestRecord>` from `{name}_sync` (default `e2eTest`). |
+| `clearStoredCollectionData()` | Truncate live + `_sync` for this URI (same as `clearE2eTestCollections`). |
+| `waitForLiveRecord(recordId, options?)` | Poll until row exists or timeout (default 30s, 50ms interval). |
 
 ---
 
-### `clearSyncTestCollections(mongoUri: string): Promise<void>`
+### `useRunLogger(): RunLogger`
 
-Deletes all documents in `mxdb-sync-test.syncTest` and `mxdb-sync-test.syncTest_sync`. Exported for advanced use (e.g. custom reset logic); `resetE2E` and initial `setupE2E` already use it.
+Returns the `RunLogger` instance created by `setupE2E` for custom `log(event, detail?)` lines in tests (events defined in `types.ts`).
 
 ---
+
+### `clearE2eTestCollections(mongoUri: string): Promise<void>`
+
+Deletes all documents in the default live + `_sync` pair (`e2eTest` / `e2eTest_sync` in `E2E_MONGO_DB_NAME`). Used by `setupE2E` / `resetE2E`.
+
+### `clearLiveAndAuditCollections(mongoUri, options?): Promise<void>`
+
+General form: truncate `{liveCollectionName}` and `{liveCollectionName}_sync` (defaults match `clearE2eTestCollections`). Use when a future suite registers a different live collection name on the same Memory Server.
+
+---
+
+## Generic wait helpers (`utils.ts`)
 
 ### `waitUntilAsync(predicate, label, timeoutMs?, intervalMs?): Promise<void>`
 
-Polls every `intervalMs` (default `50`) until `predicate()` returns a truthy promise, or throws with `Timeout waiting for: {label}` after `timeoutMs` (default `60000`).
-
----
+Polls until `predicate()` resolves **true** (default timeout 60s, interval 50ms).
 
 ### `waitForLiveRecordAbsent(recordId, timeoutMs?): Promise<void>`
 
-Uses `useServer().readLiveRecords()` until no row has `id === recordId`. Default timeout `30000` ms. Requires active e2e context.
-
----
+Polls `useServer().readLiveRecords()` until no row matches `recordId` (default 30s).
 
 ### `waitForAllClientsIdle(clients, options?): Promise<void>`
 
-Waits until every `E2EClientHandle` in `clients` has `getIsSynchronising() === false` and `getPendingC2SSyncQueueSize() === 0` for `stableTicksRequired` consecutive polls (default `8`, `pollMs` default `100`). Default overall timeout `90000` ms. No-op when `clients` is empty.
+Every client: `!getIsSynchronising()` and `getPendingC2SSyncQueueSize() === 0` for `stableTicksRequired` consecutive polls (default 8 × `pollMs` default 100ms). Default timeout 90s. Empty `clients` is a no-op.
 
-Options: `WaitForAllClientsIdleOptions` (`timeoutMs`, `stableTicksRequired`, `pollMs`).
-
----
+| Option | Description |
+|--------|-------------|
+| `requireConnected` | If `true`, also require `getIsConnected()` on each client (default `false`). |
 
 ### `auditEntryTypesChronological<R>(audit): AuditEntryType[]`
 
-Returns `AuditEntryType` values for each entry in a `ServerAuditOf<R>`, sorted by `decodeTime(entry.id)` (ULID order). Generic `R` defaults to `Record` from `@anupheaus/common`.
+Entry types in a `ServerAuditOf<R>`, ordered by ULID time (`decodeTime(entry.id)`).
 
 ---
 
-## Constants / run log helpers
+## Run logging
 
-### `e2eNoopRunLogger`
-
-`{ log(event, detail?) => void }` compatible with `createSyncClient`’s run logger. For custom harnesses that call `createSyncClient` without the file log.
-
-### `e2eForwardingRunLogger`
-
-Forwards to `getE2eRunLogger()` when set (used by `useClient` during `setupE2E`).
-
-### `createE2eRunLogger(): RunLogger`
-
-Opens a new `e2e-{timestamp}.log` under `tests/e2e/logs/`. Normally you do not call this directly; `setupE2E` does.
-
-### `getE2eRunLogger()` / `setE2eRunLogger(logger)`
-
-Access the active file logger (used by the Vitest `Logger` mock and `e2eForwardingRunLogger`).
+- **`e2eNoopRunLogger`** — no-op `log` for custom `createSyncClient` callers that do not want a file.
+- **`e2eForwardingRunLogger`** — forwards to `getE2eRunLogger()` (used by `useClient` after setup).
+- **`createRunLogger(options?)`** — opens `{logsDir}/{prefix}-{iso}.log`, prunes older matching files (`keep`, default 10). Normally called only from `setupE2E`; use `SetupE2EOptions.runLoggerOptions` to change directory/prefix/keep (e.g. stress tests use prefix `stress`).
+- **`getE2eRunLogger` / `setE2eRunLogger`** — active logger for Vitest `Logger` mock and forwarding.
 
 ---
 
 ## Types
 
-### `SetupE2EOptions`
-
-| Field | Type | Description |
-|--------|------|-------------|
-| `port?` | `number` | Passed to server startup (`0` = OS-assigned; default from `tests/sync-test/config` `DEFAULT_PORT`). |
-| `skipInitialMongoClear?` | `boolean` | If `true`, skip truncating `syncTest` / `syncTest_sync` right after the server is ready. |
+- **`types.ts`** — re-exports **`e2eTestFixture.ts`** (`e2eTestCollection`, `E2eTestRecord`, `E2eTestMetadata`) and **`runLogTypes.ts`** (`RunLogger`, `RunLogEvent`, `RunLogDetail`).
+- **`RunLogEvent`** includes shared harness events (`client_*`, `sync_*`, `server_log`, `app_logger`, `error`) and **suite-agnostic** validation hooks: `validation_summary`, `sync_idle_snapshot`, `validation_record_detail` (suites attach their own detail payloads).
 
 ---
 
-### `WaitForAllClientsIdleOptions`
+## Advanced exports (optional)
 
-| Field | Type | Description |
-|--------|------|-------------|
-| `timeoutMs?` | `number` | Max wall time (default `90000`). |
-| `stableTicksRequired?` | `number` | Consecutive idle polls before resolving (default `8`). |
-| `pollMs?` | `number` | Delay between polls (default `100`). |
+Useful for custom harnesses or tooling; most e2e specs do not import these.
 
----
-
-### `E2EServerAccess`
-
-| Member | Description |
-|--------|-------------|
-| `mongoUri` | Mongo connection string (Memory ReplSet). |
-| `port` | HTTPS server listen port. |
-| `socketHost` | Host string for the client socket **without** protocol, e.g. `localhost:12345` (socket-api builds `wss://` from it). |
-| `stopServer()` | Stops the forked server child only. |
-| `restartServer()` | Stops child, waits, respawns on the same port; returns the new server instance (see `tests/sync-test/serverLifecycle.ts`). |
-| `readLiveRecords()` | All documents in server `syncTest`, as `SyncTestRecord[]`. |
-| `readAudits(liveCollectionName?)` | Map of record id → `ServerAuditOf<SyncTestRecord>` from `{liveCollectionName}_sync`; default live name is `syncTest`. |
-| `clearStoredCollectionData()` | Same as `clearSyncTestCollections` for this run’s URI. |
-| `waitForLiveRecord(recordId, options?)` | Polls `readLiveRecords` until `recordId` exists or throws after `timeoutMs` (default `30000`) with `intervalMs` (default `50`). Use after local writes because client-to-server sync is asynchronous. |
+| Export | Role |
+|--------|------|
+| `createSyncClient`, `SyncClient` | Build a client without `useClient` (see `syncClient.tsx`). |
+| `readServerRecords(mongoUri, options?)` | Read a live collection as `E2eTestRecord[]` (default collection/db from the default fixture). |
+| `readServerAuditDocuments(mongoUri, liveCollectionName, options?)` | Read `_sync` audits as a `Map`. |
+| `formatServerLogDetail`, `condenseServerLogDetail` | Parse/condense server stdout lines for logs. |
+| `condenseAppLoggerDetail`, `AppLoggerRunLogDetail` | Condense mocked app logger payloads. |
+| `startLifecycle`, `startMongo`, `startServerInstance`, `stopLifecycle`, `setServerLogCallback` | Lower-level lifecycle control (`serverLifecycle.ts`). |
+| `vitestE2eTlsEnv` | Build `test.env` for Vitest forks (TLS trust). `vitestSyncTestTlsEnv` is a deprecated alias. |
+| `E2E_MONGO_DB_NAME` | Default DB name for Memory Server + server child. |
 
 ---
 
-### `E2EClientHandle`
+## Files in this folder
 
-Extends **`SyncClient`** from `tests/sync-test/syncClient.tsx` with a wider `connect`:
-
-- **`connect(host?: string): Promise<void>`** — If `host` is omitted, uses `useServer().socketHost`.
-
-All other methods match `SyncClient`:
-
-| Method | Description |
-|--------|-------------|
-| `connect(serverUrl: string)` | *(Base signature; e2e wrapper allows optional host.)* Mounts React tree and resolves when driver is ready. |
-| `disconnect()` / `reconnect()` | Test hooks on the MXDB socket. |
-| `get(recordId)` | Fetch via collection (not local-only). |
-| `getLocal(recordId)` | Local SQLite row only. |
-| `subscribeGetAll()` | Subscribe full collection snapshots from server. |
-| `getGetAllSubscriptionSnapshot()` | Last get-all subscription snapshot. |
-| `upsert(record)` | Local upsert + sync when connected. |
-| `remove(recordId)` | Remove (queues offline if disconnected). |
-| `getIsConnected()` / `getIsSynchronising()` | Connection / sync state. |
-| `getLocalRecords()` | Current local rows from the active query hook. |
-| `getPendingC2SSyncQueueSize()` | Deduped C2S queue size. |
-| `getLocalAudit(recordId)` | Local audit for a record. |
-| `unmount()` | Unmount React root and remove container. |
-
-Record shape: **`SyncTestRecord`** from `tests/sync-test/types.ts`. Audit types on the server: **`ServerAuditOf<SyncTestRecord>`** from `src/common`.
-
----
-
-## Non-exported internals
-
-Files in this folder that are **not** re-exported from `index.ts` (implementation / Vitest only):
-
-- `context.ts` — lifecycle state and implementations of `setupE2E` / `useClient` / `useServer`.
-- `browserEnvironment.ts` — used by `installBrowserEnvironment` and `vitestGlobals.ts`.
-- `utils.ts` — implementations of the exported wait/audit helpers (import via the barrel only).
-- `e2eVitestSetup.ts` — Vitest `setupFiles` entry (Logger mock + action timeout); load before `vitestGlobals.ts`.
-- `vitestGlobals.ts` — browser globals `setupFiles` entry.
-- `e2eRunLoggerSink.ts` — backing store for the active `RunLogger` during a suite.
+| File / dir | Purpose |
+|------------|---------|
+| `index.ts` | Barrel exports. |
+| `context.ts` | E2E context: `setupE2E`, `resetE2E`, `teardownE2E`, `useClient`, `useServer`, `useRunLogger`. |
+| `types.ts` | Re-exports `e2eTestFixture` + `runLogTypes` (stable import path). |
+| `e2eTestFixture.ts` | Default `e2eTest` collection + `E2eTestRecord` shape. |
+| `runLogTypes.ts` | `RunLogger`, `RunLogEvent`, `RunLogDetail`. |
+| `mongoConstants.ts` | `E2E_MONGO_DB_NAME`, `E2E_SOCKET_API_NAME`, `E2E_SERVER_PROCESS_ENV`, `E2E_DEFAULT_CLIENT_DB_PREFIX`. |
+| `browserEnvironment.ts` | `installBrowserEnvironment`. |
+| `utils.ts` | `waitUntilAsync`, `waitForLiveRecordAbsent`, `waitForAllClientsIdle`, `auditEntryTypesChronological`. |
+| `syncClient.tsx` | React harness + `createSyncClient`. |
+| `mongoData.ts` | `clearLiveAndAuditCollections`, `clearE2eTestCollections`. |
+| `readServerRecords.ts` / `readServerAudits.ts` | Direct Mongo reads for live rows / audits. |
+| `serverLifecycle.ts` | Mongo ReplSet, fork `serverProcess.cjs`, restart/stop. |
+| `serverProcess.cjs` | Child entry: starts authenticated MXDB server for e2e. |
+| `runLogger.ts` | File `createRunLogger`, active logger get/set, `e2eNoopRunLogger`, `e2eForwardingRunLogger`. |
+| `formatServerLogDetail.ts` | Server line → structured detail. |
+| `appLoggerRunLogBridge.ts` | App logger → condensed log lines. |
+| `vitestTlsEnv.ts` | `vitestE2eTlsEnv`. |
+| `preload-tls.cjs` | Node preload: trust local CA for `wss://localhost`. |
+| `certs/` | Local CA + localhost TLS material for the e2e server. |
+| `e2eVitestSetup.ts` | Vitest `setupFiles`: mocks / timeouts. |
+| `vitestGlobals.ts` | Vitest `setupFiles`: `installBrowserEnvironment`. |
 
 ---
 
-## Typical shape
+## Typical test shape
 
 ```ts
 beforeAll(async () => { await setupE2E(); }, 90_000);
@@ -221,4 +248,8 @@ beforeEach(async () => { await resetE2E(); });
 afterAll(async () => { await teardownE2E(); }, 30_000);
 ```
 
-See `tests/e2e/harness.smoke.test.ts` for a minimal example and `tests/e2e/deletions.e2e.test.ts` for usage of the wait/audit utilities.
+Examples:
+
+- **`tests/e2e/harness.smoke.test.ts`** — minimal upsert + `waitForLiveRecord`.
+- **`tests/e2e/deletions.e2e.test.ts`** — disconnect/reconnect, `waitForAllClientsIdle`, `auditEntryTypesChronological`.
+- **`tests/e2e/stress/clientSync.integration.test.ts`** — long run; uses `setupE2E({ runLoggerOptions: { logsDir: …, prefix: 'stress' } })` and keeps stress-specific harness code under `tests/e2e/stress/` (same idea for any future `tests/e2e/<suite>/` folder).

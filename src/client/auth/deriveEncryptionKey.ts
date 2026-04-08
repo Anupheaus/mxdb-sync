@@ -2,9 +2,10 @@
  * §4.3 — Derive a 256-bit AES-GCM encryption key from a WebAuthn credential
  * via the PRF extension.
  *
- * Returns `undefined` in environments where the Web Authentication API is
- * unavailable (Node.js, test runners, browsers without WebAuthn/PRF support),
- * so callers can gracefully fall back to an unencrypted SQLite store.
+ * Throws in all non-success paths: unencrypted storage is never permitted.
+ * The mock-detection guard also throws if `navigator.credentials.get` does not
+ * appear to be a native browser implementation, preventing trivial credential
+ * substitution attacks.
  *
  * The returned raw bytes are passed to the SQLite worker (via postMessage),
  * which imports them as a non-extractable CryptoKey internally. Keeping the
@@ -29,37 +30,110 @@ export async function deriveKeyFromPrfOutput(prfOutput: ArrayBuffer): Promise<Ui
 }
 
 /**
- * Derive a 256-bit key from an existing WebAuthn credential using the PRF
- * extension.
+ * Guard: throws if `navigator.credentials.get` does not appear to be a native
+ * browser implementation.
+ *
+ * Two checks are applied:
+ *
+ * 1. `Function.prototype.toString.call(navigator.credentials.get)` must contain
+ *    `[native code]`. A plain JS function assigned to `navigator.credentials`
+ *    will always fail this.
+ *
+ * 2. `navigator.credentials` must **not** be an own property of the `navigator`
+ *    instance. In every real browser it lives on `Navigator.prototype`. Replacing
+ *    it via `navigator.credentials = { … }` creates an own property and fails
+ *    this check.
+ *
+ * A sophisticated attacker can defeat both checks by patching
+ * `Function.prototype.toString` with a WeakSet-backed shim and installing their
+ * mock on `Navigator.prototype` — but that requires deliberate effort and
+ * specific knowledge of this implementation. Casual console/extension mocks are
+ * caught reliably.
+ */
+function assertCredentialsNotMocked(): void {
+  if (typeof navigator === 'undefined' || navigator.credentials == null) {
+    throw new Error('MXDB: WebAuthn is not available in this environment. Unencrypted storage is not permitted.');
+  }
+
+  // Own-property check: real credentials live on Navigator.prototype, not the instance.
+  if (Object.prototype.hasOwnProperty.call(navigator, 'credentials')) {
+    throw new Error('MXDB Security: navigator.credentials has been replaced on the navigator instance — credential mocking is not permitted.');
+  }
+
+  // Native-code check: the get method must appear native.
+  const getStr = Function.prototype.toString.call(navigator.credentials.get);
+  if (!getStr.includes('[native code]')) {
+    throw new Error('MXDB Security: navigator.credentials.get does not appear to be a native implementation — credential mocking is not permitted.');
+  }
+}
+
+/**
+ * Derive a 256-bit key from an existing WebAuthn credential using the PRF extension.
+ *
+ * Throws if WebAuthn is unavailable, credentials appear mocked, PRF is not
+ * supported, or the user cancels. Unencrypted storage is never permitted.
  *
  * @param credentialId - Raw credential ID bytes as returned by `navigator.credentials.create()`.
- * @returns 32 raw key bytes, or `undefined` if PRF is unavailable.
+ * @returns 32 raw key bytes.
  */
-export async function deriveEncryptionKey(credentialId: Uint8Array): Promise<Uint8Array | undefined> {
-  if (typeof navigator === 'undefined' || typeof navigator.credentials === 'undefined') {
-    return undefined;
+export async function deriveEncryptionKey(credentialId: Uint8Array): Promise<Uint8Array> {
+  assertCredentialsNotMocked();
+
+  const assertion = await navigator.credentials.get({
+    publicKey: {
+      challenge: crypto.getRandomValues(new Uint8Array(32)),
+      allowCredentials: [{ type: 'public-key', id: credentialId }],
+      extensions: {
+        prf: { eval: { first: PRF_SALT } },
+      } as any,
+    },
+  } as CredentialRequestOptions) as PublicKeyCredential | null;
+
+  if (assertion == null) {
+    throw new Error('MXDB: WebAuthn assertion was cancelled or returned null. Unencrypted storage is not permitted.');
   }
 
+  // ── Structural authenticity checks ──────────────────────────────────────────
+  // These verify that the returned object has the internal structure a real
+  // browser produces, making it significantly harder to satisfy with a hand-
+  // crafted fake than the pre-call native-code checks alone.
+
+  // 1. response must be a genuine AuthenticatorAssertionResponse, not a plain
+  //    object. Spoofing this requires patching AuthenticatorAssertionResponse
+  //    .prototype — a much more obscure target than mocking credentials.get.
+  if (
+    typeof AuthenticatorAssertionResponse !== 'undefined' &&
+    !(assertion.response instanceof AuthenticatorAssertionResponse)
+  ) {
+    throw new Error('MXDB Security: WebAuthn assertion response is not a genuine AuthenticatorAssertionResponse — credential mocking is not permitted.');
+  }
+
+  // 2. clientDataJSON must deserialise to a valid object with type 'webauthn.get'
+  //    and an origin matching the current page. Forging a correctly origin-bound
+  //    clientDataJSON without a real browser credential is not practical.
   try {
-    const assertion = await navigator.credentials.get({
-      publicKey: {
-        challenge: crypto.getRandomValues(new Uint8Array(32)),
-        allowCredentials: [{ type: 'public-key', id: credentialId }],
-        extensions: {
-          prf: { eval: { first: PRF_SALT } },
-        } as any,
-      },
-    } as CredentialRequestOptions) as PublicKeyCredential | null;
-
-    if (assertion == null) return undefined;
-
-    const ext = (assertion.getClientExtensionResults() as any)?.prf;
-    const prfOutput: ArrayBuffer | undefined = ext?.results?.first;
-    if (prfOutput == null) return undefined;
-
-    return deriveKeyFromPrfOutput(prfOutput);
-  } catch {
-    // WebAuthn not supported, user cancelled, or PRF extension unavailable
-    return undefined;
+    const clientData = JSON.parse(new TextDecoder().decode(assertion.response.clientDataJSON)) as Record<string, unknown>;
+    if (clientData.type !== 'webauthn.get') {
+      throw new Error('MXDB Security: clientDataJSON type field is not "webauthn.get" — credential mocking is not permitted.');
+    }
+    if (typeof window !== 'undefined' && clientData.origin !== window.location.origin) {
+      throw new Error('MXDB Security: clientDataJSON origin does not match the current page origin — credential mocking is not permitted.');
+    }
+  } catch (err) {
+    if (err instanceof Error && err.message.startsWith('MXDB Security:')) throw err;
+    throw new Error('MXDB Security: clientDataJSON could not be parsed — credential mocking is not permitted.');
   }
+
+  // 3. PRF output must be a real ArrayBuffer (not a Uint8Array, plain object,
+  //    or other ArrayBufferView). A fake that returns a Uint8Array fails this.
+  const ext = (assertion.getClientExtensionResults() as any)?.prf;
+  const prfOutput: unknown = ext?.results?.first;
+  if (prfOutput == null) {
+    throw new Error('MXDB: WebAuthn PRF extension is not supported by this device or browser. Unencrypted storage is not permitted.');
+  }
+  if (Object.prototype.toString.call(prfOutput) !== '[object ArrayBuffer]') {
+    throw new Error('MXDB Security: PRF output is not a plain ArrayBuffer — credential mocking is not permitted.');
+  }
+
+  return deriveKeyFromPrfOutput(prfOutput as ArrayBuffer);
 }

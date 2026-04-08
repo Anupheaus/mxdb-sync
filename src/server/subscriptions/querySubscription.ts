@@ -1,5 +1,6 @@
 import { mxdbQuerySubscription } from '../../common';
 import { useCollection } from '../collections';
+import { useServerToClientSync } from '../providers';
 import { createServerCollectionSubscription } from './createServerCollectionSubscription';
 import { pushSubscriptionResultRecords } from './pushSubscriptionResultRecords';
 
@@ -7,12 +8,15 @@ export const serverQuerySubscription = createServerCollectionSubscription<string
   async ({ request, previousResponse, subscriptionId, additionalData: previousRecordIds, updateAdditionalData, update, onUnsubscribe }) => {
     const { collectionName, filters, pagination, sorts } = request;
     const { collection, query, onChange, removeOnChange } = useCollection(collectionName);
+    // Capture at subscription-setup time. onChange callbacks fire from the MongoDB change stream
+    // outside any ALS context, so useServerToClientSync() there returns the no-op instance.
+    const { pushRecordsToClient } = useServerToClientSync();
 
     const runQuery = () => query({ filters, pagination, sorts, getAccurateTotal: true });
 
     async function refreshQueryAndPushToSubscriber(): Promise<[string[], number]> {
       const { data: records, total } = await runQuery();
-      await pushSubscriptionResultRecords(collection, records, []);
+      await pushSubscriptionResultRecords(collection, records, [], pushRecordsToClient);
       return [records.ids(), total];
     }
 

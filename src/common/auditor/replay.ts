@@ -217,6 +217,10 @@ export function replayHistoryEndState<T extends MXDBRecord>(
         break;
       }
       case AuditEntryType.Deleted:
+        // Only null out live on the first Deleted entry. Subsequent Deleted entries
+        // (e.g. two clients both deleting the same record) must not touch shadow —
+        // shadow must continue to advance with any later Updated entries so that a
+        // future Restored can copy it back to live correctly.
         live = undefined;
         break;
       case AuditEntryType.Updated: {

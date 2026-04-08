@@ -7,6 +7,10 @@ import { AUDIT_TABLE_SUFFIX, LIVE_TABLE_SUFFIX } from './dbs-consts';
 import { auditor } from '../../../common';
 import type { AuditEntry, AuditOf } from '../../../common';
 import { AuditEntryType } from '../../../common';
+import type {
+  MXDBActiveRecordState,
+  MXDBDeletedRecordState,
+} from '../../../common/sync-engine';
 import { decodeTime, ulid } from 'ulidx';
 import type { SqliteWorkerClient } from '../../db-worker/SqliteWorkerClient';
 import { filtersToSql } from '../../db-worker/filtersToSql';
@@ -18,8 +22,13 @@ export interface UpsertConfig {
   ifHasHistory?: 'default' | 'doNotUpsert';
 }
 
-export interface DeleteConfig {
-  auditAction?: 'remove' | 'default';
+/** Options for {@link DbCollection.delete}. */
+export interface DeleteOptions {
+  /**
+   * When true, only the live row is removed; no Deleted audit entry is appended.
+   * Use before {@link removeAuditTrail} (e.g. server-driven delete) to avoid writing a tombstone that is immediately discarded.
+   */
+  skipAuditAppend?: boolean;
 }
 
 // ─── SQLite row shapes ────────────────────────────────────────────────────────
@@ -112,6 +121,89 @@ export class DbCollection<RecordType extends Record = Record> {
     return idOrIds.map(id => this.#auditRecords.get(id)).removeNull();
   }
 
+  // ─── Sync access API (for sync-engine callbacks) ─────────────────────────
+  //
+  // The sync-engine (CD/CR) requires synchronous read/write callbacks. These
+  // methods bypass #loadingPromise and operate directly against the in-memory
+  // maps. Callers MUST await {@link whenReady} before invoking any sync method.
+  // SQLite persistence is fire-and-forget through the worker queue.
+
+  /** Resolve once the initial SQLite load has completed. */
+  @bind
+  public whenReady(): Promise<void> { return this.#loadingPromise; }
+
+  /** Synchronous read of states for the given record ids. Missing ids are omitted. */
+  @bind
+  public getStatesSync(recordIds: string[]): Array<MXDBActiveRecordState<RecordType> | MXDBDeletedRecordState> {
+    const out: Array<MXDBActiveRecordState<RecordType> | MXDBDeletedRecordState> = [];
+    for (const id of recordIds) {
+      const audit = this.#auditRecords.get(id);
+      if (audit == null) continue;
+      const record = this.#records.get(id);
+      if (record != null) out.push({ record, audit: audit.entries });
+      else out.push({ recordId: id, audit: audit.entries });
+    }
+    return out;
+  }
+
+  /** Synchronous read of every record/audit pair that still has pending (non-branch-only) changes. */
+  @bind
+  public getPendingStatesSync(): Array<MXDBActiveRecordState<RecordType> | MXDBDeletedRecordState> {
+    const out: Array<MXDBActiveRecordState<RecordType> | MXDBDeletedRecordState> = [];
+    for (const audit of this.#auditRecords.values()) {
+      if (!auditor.hasPendingChanges(audit)) continue;
+      const record = this.#records.get(audit.id);
+      if (record != null) out.push({ record, audit: audit.entries });
+      else out.push({ recordId: audit.id, audit: audit.entries });
+    }
+    return out;
+  }
+
+  /**
+   * Apply an active record write coming from the server (CR.onUpdate).
+   * Replaces the in-memory record and collapses its audit to a Branched anchor at lastAuditEntryId.
+   */
+  @bind
+  public applyServerWriteSync(record: RecordType, lastAuditEntryId: string): void {
+    this.#records.set(record.id, record);
+    const branchedAudit = auditor.createBranchFrom<RecordType>(record.id, lastAuditEntryId);
+    this.#auditRecords.set(record.id, branchedAudit);
+    void this.#persist([record], [branchedAudit]);
+    this.#invokeOnChange({ type: 'upsert', records: [record], auditAction: 'branched' });
+  }
+
+  /**
+   * Apply a delete coming from the server (CR.onUpdate).
+   * Removes the live record and the audit trail entirely (server is authoritative on delete).
+   */
+  @bind
+  public applyServerDeleteSync(recordIds: string[]): void {
+    if (recordIds.length === 0) return;
+    const removed: string[] = [];
+    for (const id of recordIds) {
+      if (this.#records.delete(id)) removed.push(id);
+      else if (this.#auditRecords.has(id)) removed.push(id);
+      this.#auditRecords.delete(id);
+    }
+    if (removed.length === 0) return;
+    void this.#deleteLiveRowsOnly(removed);
+    void this.#deleteAuditRowsOnly(removed);
+    this.#invokeOnChange({ type: 'remove', ids: removed, auditAction: 'remove' });
+  }
+
+  /**
+   * Collapse the in-memory audit for a record to a Branched anchor at the given ULID
+   * (CD success path — server has accepted everything up to anchorUlid).
+   */
+  @bind
+  public collapseAuditSync(recordId: string, anchorUlid: string): void {
+    const existing = this.#auditRecords.get(recordId);
+    if (existing == null) return;
+    const collapsed = auditor.collapseToAnchor(existing, anchorUlid);
+    this.#auditRecords.set(recordId, collapsed);
+    void this.#persistAudits([collapsed]);
+  }
+
   // ─── Upsert ───────────────────────────────────────────────────────────────
 
   public async upsert(record: RecordType, auditAction?: 'default'): Promise<void>;
@@ -161,60 +253,65 @@ export class DbCollection<RecordType extends Record = Record> {
     this.#persistAudits([newAudit]);
   }
 
-  // ─── Delete ───────────────────────────────────────────────────────────────
+  // ─── Delete (live row + optional audit tombstone) ─────────────────────────
+  //
+  // Removes the materialised row from memory and the live SQLite table.
+  // When {@link DeleteOptions.skipAuditAppend} is false (default), appends a Deleted audit entry
+  // for ids that have a local audit — {@link DbCollection} never strips the audit trail here;
+  // use {@link removeAuditTrail} for full audit removal (e.g. after server-driven delete).
 
-  public async delete(id: string, config?: DeleteConfig): Promise<boolean>;
-  public async delete(ids: string[], config?: DeleteConfig): Promise<boolean>;
-  public async delete(record: RecordType, config?: DeleteConfig): Promise<boolean>;
-  public async delete(records: RecordType[], config?: DeleteConfig): Promise<boolean>;
+  public async delete(id: string, options?: DeleteOptions): Promise<boolean>;
+  public async delete(ids: string[], options?: DeleteOptions): Promise<boolean>;
+  public async delete(record: RecordType, options?: DeleteOptions): Promise<boolean>;
+  public async delete(records: RecordType[], options?: DeleteOptions): Promise<boolean>;
   @bind
-  public async delete(idsOrRecords: string | string[] | RecordType | RecordType[], config?: DeleteConfig): Promise<boolean> {
+  public async delete(
+    idsOrRecords: string | string[] | RecordType | RecordType[],
+    options?: DeleteOptions,
+  ): Promise<boolean> {
     await this.#loadingPromise;
-    if (!Array.isArray(idsOrRecords)) return this.delete([idsOrRecords].removeNull() as any, config);
+    if (!Array.isArray(idsOrRecords)) return this.delete([idsOrRecords].removeNull() as any, options);
     if (idsOrRecords.length === 0) return false;
-    const { auditAction = 'default' } = config ?? {};
+    const skipAuditAppend = options?.skipAuditAppend === true;
     const idsToDelete: string[] = [];
-    const tombstoneIds: string[] = [];
+    const auditsToPersist: AuditOf<RecordType>[] = [];
     for (const idOrRecord of idsOrRecords) {
       const id = is.not.blank(idOrRecord) ? idOrRecord as string : (idOrRecord as RecordType).id;
-      const record = this.#records.get(id);
-      if (record == null) {
-        // Record not in local cache. If using default audit action, create a tombstone so
-        // the delete can be propagated to the server via the next sync cycle.
-        if (auditAction === 'default' && !this.#auditRecords.has(id)) {
-          const branch = auditor.createBranchFrom<RecordType>(id, auditor.generateUlid());
-          const tombstone = auditor.delete(branch) as AuditOf<RecordType>;
-          this.#auditRecords.set(id, tombstone);
-          void this.#persistAudits([tombstone]);
-          tombstoneIds.push(id);
+      if (!skipAuditAppend) {
+        const auditRecord = this.#auditRecords.get(id);
+        if (auditRecord != null) {
+          const deletedAudit = auditor.delete(auditRecord);
+          this.#auditRecords.set(id, deletedAudit);
+          auditsToPersist.push(deletedAudit);
         }
-        continue;
       }
-      this.#records.delete(id);
-      const auditRecord = this.#auditRecords.get(id);
-      if (auditRecord == null) {
-        idsToDelete.push(id);
-        continue;
-      }
-      if (auditAction === 'default') {
-        const deletedAudit = auditor.delete(auditRecord);
-        this.#auditRecords.set(id, deletedAudit);
-        void this.#persistAudits([deletedAudit]);
-      } else if (auditAction === 'remove') {
-        this.#auditRecords.delete(id);
-      }
+      if (this.#records.has(id)) this.#records.delete(id);
       idsToDelete.push(id);
     }
-    if (idsToDelete.length === 0 && tombstoneIds.length === 0) return false;
-    if (idsToDelete.length > 0) {
-      void this.#deleteRecords(idsToDelete, auditAction === 'remove');
-      this.#invokeOnChange({ type: 'remove', ids: idsToDelete, auditAction: auditAction === 'remove' ? 'remove' : 'markAsDeleted' });
-    }
-    if (tombstoneIds.length > 0) {
-      // Notify listeners (e.g. ClientToServerProvider) so they can send an immediate remove to the server.
-      this.#invokeOnChange({ type: 'remove', ids: tombstoneIds, auditAction: 'markAsDeleted' });
-    }
+    await this.#deleteLiveRowsOnly(idsToDelete);
+    if (auditsToPersist.length > 0) void this.#persistAudits(auditsToPersist);
     return true;
+  }
+
+  /**
+   * Drop audit documents for the given record ids (memory + SQLite audit table).
+   * Intended for server-driven reconciliation after the live row is already gone.
+   */
+  @bind
+  public async removeAuditTrail(ids: string | string[]): Promise<void> {
+    await this.#loadingPromise;
+    const idArr = Array.isArray(ids) ? ids : [ids];
+    if (idArr.length === 0) return;
+    for (const id of idArr) {
+      this.#auditRecords.delete(id);
+    }
+    await this.#deleteAuditRowsOnly(idArr);
+  }
+
+  @bind
+  public notifyRemove(ids: string[], auditAction: 'remove' | 'markAsDeleted'): void {
+    if (ids.length === 0) return;
+    this.#invokeOnChange({ type: 'remove', ids, auditAction });
   }
 
   // ─── Query (SQL-backed) ───────────────────────────────────────────────────
@@ -391,6 +488,26 @@ export class DbCollection<RecordType extends Record = Record> {
       });
     }
     return stmts;
+  }
+
+  async #deleteLiveRowsOnly(ids: string[]): Promise<void> {
+    if (ids.length === 0) return;
+    const placeholders = ids.map(() => '?').join(', ');
+    const liveTable = `${this.#name}${LIVE_TABLE_SUFFIX}`;
+    await this.#worker.execBatch(
+      [{ sql: `DELETE FROM ${liveTable} WHERE id IN (${placeholders})`, params: ids }],
+      this.#name,
+    );
+  }
+
+  async #deleteAuditRowsOnly(ids: string[]): Promise<void> {
+    if (ids.length === 0) return;
+    const placeholders = ids.map(() => '?').join(', ');
+    const auditTable = `${this.#name}${AUDIT_TABLE_SUFFIX}`;
+    await this.#worker.execBatch(
+      [{ sql: `DELETE FROM ${auditTable} WHERE recordId IN (${placeholders})`, params: ids }],
+      this.#name,
+    );
   }
 
   async #deleteRecords(ids: string[], removeAudit = false): Promise<void> {

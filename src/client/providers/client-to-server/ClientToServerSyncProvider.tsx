@@ -78,9 +78,14 @@ const logger = useLogger('C2S');
   useEffect(() => c2s.onSyncStateChanged(setIsSyncing), [c2s]);
 
   // Provide to both the instance context (for enqueue) and the gate context (for S2C)
-  const gateValue = useMemo(() => ({
-    waitForS2CGate: () => c2s.waitForS2CGate(),
-  }), [c2s]);
+  const gateValue = useMemo(
+    () => ({
+      waitForS2CGate: () => c2s.waitForS2CGate(),
+      hasQueuedPendingForRecord: (collectionName: string, recordId: string) =>
+        c2s.hasQueuedPendingForRecord(collectionName, recordId),
+    }),
+    [c2s],
+  );
 
   const syncStateValue = useMemo(() => ({
     isSyncing,

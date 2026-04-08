@@ -1,29 +1,33 @@
 import type { ServerAuditOf } from '../../../src/common';
 import { dbs } from '../../../src/client/providers/dbs/Dbs';
-import { DEFAULT_PORT } from '../../sync-test/config';
-import { formatServerLogDetail } from '../../sync-test/formatServerLogDetail';
-import { readServerAuditDocuments } from '../../sync-test/readServerAudits';
-import { readServerRecords } from '../../sync-test/readServerRecords';
+import { formatServerLogDetail } from './formatServerLogDetail';
+import { readServerAuditDocuments } from './readServerAudits';
+import { readServerRecords } from './readServerRecords';
 import {
   startLifecycle,
   setServerLogCallback,
   stopLifecycle,
   type LifecycleState,
-} from '../../sync-test/serverLifecycle';
-import type { RunLogger } from '../../sync-test/runLogger';
-import { createSyncClient, type SyncClient } from '../../sync-test/syncClient';
-import { syncTestCollection, type SyncTestRecord } from '../../sync-test/types';
-import { createE2eRunLogger } from './createE2eRunLogger';
+} from './serverLifecycle';
+import type { RunLogger } from './types';
+import { createSyncClient, type SyncClient } from './syncClient';
+import { e2eTestCollection, type E2eTestRecord } from './types';
 import { installBrowserEnvironment } from './browserEnvironment';
-import { clearSyncTestCollections } from './mongoData';
-import { e2eForwardingRunLogger } from './e2eRunLogger';
-import { setE2eRunLogger } from './e2eRunLoggerSink';
+import { clearE2eTestCollections } from './mongoData';
+import {
+  createRunLogger,
+  e2eForwardingRunLogger,
+  setE2eRunLogger,
+  type CreateRunLoggerOptions,
+} from './runLogger';
 
 export interface SetupE2EOptions {
   /** Passed to `startLifecycle` (`0` = OS-chosen port). */
   port?: number;
-  /** If true, do not clear `syncTest` / `syncTest_sync` after the server is ready. */
+  /** If true, do not clear `e2eTest` / `e2eTest_sync` after the server is ready. */
   skipInitialMongoClear?: boolean;
+  /** Override log file directory, prefix, or retention count for the run logger. */
+  runLoggerOptions?: CreateRunLoggerOptions;
 }
 
 /** Named client handle: same as {@link SyncClient} with optional host on `connect()`. */
@@ -38,21 +42,18 @@ export type E2EClientHandle = SyncClient & {
 export interface E2EServerAccess {
   readonly mongoUri: string;
   readonly port: number;
-  /**
-   * Socket host without protocol (socket-api builds `wss://` from this).
-   * Same convention as `tests/sync-test/clientSync.integration.test.ts`.
-   */
+  /** Socket host without protocol (socket-api builds `wss://` from this). */
   readonly socketHost: string;
   stopServer(): Promise<void>;
   restartServer(): ReturnType<LifecycleState['restartServer']>;
-  /** All rows in the server `syncTest` collection. */
-  readLiveRecords(): Promise<SyncTestRecord[]>;
-  /** Parsed audit documents from `{liveCollectionName}_sync` (default `syncTest`). */
-  readAudits(liveCollectionName?: string): Promise<Map<string, ServerAuditOf<SyncTestRecord>>>;
-  /** Same as initial reset: truncate sync-test live + audit collections. */
+  /** All rows in the server `e2eTest` collection. */
+  readLiveRecords(): Promise<E2eTestRecord[]>;
+  /** Parsed audit documents from `{liveCollectionName}_sync` (default `e2eTest`). */
+  readAudits(liveCollectionName?: string): Promise<Map<string, ServerAuditOf<E2eTestRecord>>>;
+  /** Same as initial reset: truncate default live + `_sync` audit collections. */
   clearStoredCollectionData(): Promise<void>;
   /**
-   * Poll Mongo until `syncTest` contains a row with the given id (or timeout).
+   * Poll Mongo until `e2eTest` contains a row with the given id (or timeout).
    * Use after local upserts so C2S sync can finish.
    */
   waitForLiveRecord(
@@ -70,6 +71,12 @@ interface E2EContextInternal {
   lifecycle: LifecycleState;
   clients: Map<string, ClientEntry>;
   runLogger: RunLogger;
+  /** Incremented for each `app_logger` line at error level (stress tests can assert zero). */
+  appLoggerErrorStats: { count: number };
+  processErrorHandlers: {
+    onUnhandledRejection: (reason: unknown) => void;
+    onUncaughtException: (error: Error) => void;
+  };
 }
 
 let ctx: E2EContextInternal | null = null;
@@ -98,7 +105,7 @@ function wrapClient(raw: SyncClient): E2EClientHandle {
 
 /**
  * One-time environment (IndexedDB + JSDOM), MongoDB Memory Server, and HTTPS sync server child.
- * Temporarily clears `global.window` / `document` while spawning the server (same as sync-test).
+ * Temporarily clears `global.window` / `document` while spawning the server child.
  */
 export async function setupE2E(options?: SetupE2EOptions): Promise<void> {
   if (ctx != null) {
@@ -107,37 +114,75 @@ export async function setupE2E(options?: SetupE2EOptions): Promise<void> {
 
   installBrowserEnvironment();
 
-  const port = options?.port ?? DEFAULT_PORT;
+  const port = options?.port ?? 0;
   const win = (globalThis as unknown as { window?: unknown }).window;
   const doc = (globalThis as unknown as { document?: Document }).document;
   delete (globalThis as unknown as { window?: unknown }).window;
   delete (globalThis as unknown as { document?: Document }).document;
 
-  const runLogger = createE2eRunLogger();
+  const baseRunLogger = createRunLogger({ prefix: 'e2e', ...options?.runLoggerOptions });
+  const appLoggerErrorStats = { count: 0 };
+  const runLogger: RunLogger = {
+    log(event, detail) {
+      if (event === 'app_logger' && detail != null) {
+        const lvl = String((detail as { level?: string }).level ?? '').toLowerCase();
+        if (lvl === 'error') appLoggerErrorStats.count += 1;
+      }
+      baseRunLogger.log(event, detail);
+    },
+    close: () => baseRunLogger.close(),
+  };
   setE2eRunLogger(runLogger);
   setServerLogCallback((stream, line) => {
     const detail = formatServerLogDetail(stream, line);
     if (detail != null) runLogger.log('server_log', detail);
   });
-  runLogger.log('test_setup', { phase: 'e2e_setupE2E', port: options?.port ?? DEFAULT_PORT });
+
+  runLogger.log('test_setup', { phase: 'e2e_setupE2E', port: options?.port ?? 0 });
 
   let lifecycle: LifecycleState;
   try {
-    lifecycle = await startLifecycle(port, [syncTestCollection]);
+    lifecycle = await startLifecycle(port, [e2eTestCollection]);
     if (!options?.skipInitialMongoClear) {
-      await clearSyncTestCollections(lifecycle.mongoUri);
+      await clearE2eTestCollections(lifecycle.mongoUri);
     }
   } finally {
-    (globalThis as unknown as { window: unknown }).window = win;
-    (globalThis as unknown as { document: Document }).document = doc;
+    if (win !== undefined) {
+      (globalThis as unknown as { window: unknown }).window = win;
+    } else {
+      delete (globalThis as unknown as { window?: unknown }).window;
+    }
+    if (doc !== undefined) {
+      (globalThis as unknown as { document: Document }).document = doc;
+    } else {
+      delete (globalThis as unknown as { document?: Document }).document;
+    }
   }
 
   runLogger.log('server_start', { port: lifecycle.port });
-  ctx = { lifecycle, clients: new Map(), runLogger };
+
+  const onUnhandledRejection = (reason: unknown) => {
+    runLogger.log('error', {
+      type: 'unhandledRejection',
+      reason: String((reason as { message?: string })?.message ?? reason),
+    });
+  };
+  const onUncaughtException = (error: Error) => {
+    runLogger.log('error', {
+      type: 'uncaughtException',
+      error: String(error?.message ?? error),
+      stack: String(error?.stack ?? ''),
+    });
+  };
+  process.on('unhandledRejection', onUnhandledRejection);
+  process.on('uncaughtException', onUncaughtException);
+  const processErrorHandlers = { onUnhandledRejection, onUncaughtException };
+
+  ctx = { lifecycle, clients: new Map(), runLogger, appLoggerErrorStats, processErrorHandlers };
 }
 
 /**
- * Disconnect local clients, close their DB handles, and clear server-side sync-test data.
+ * Disconnect local clients, close their DB handles, and clear server-side default collection data.
  * Intended for `beforeEach` so each test starts from an empty server and fresh client DB names
  * are recreated on next `useClient`.
  */
@@ -149,7 +194,7 @@ export async function resetE2E(): Promise<void> {
     await dbs.close(dbName);
   }
   c.clients.clear();
-  await clearSyncTestCollections(c.lifecycle.mongoUri);
+  await clearE2eTestCollections(c.lifecycle.mongoUri);
 }
 
 /**
@@ -158,11 +203,13 @@ export async function resetE2E(): Promise<void> {
  */
 export async function teardownE2E(): Promise<void> {
   if (ctx == null) return;
-  const { runLogger } = ctx;
+  const { runLogger, processErrorHandlers } = ctx;
   for (const { dbName, raw } of ctx.clients.values()) {
     raw.unmount();
     await dbs.close(dbName);
   }
+  process.off('unhandledRejection', processErrorHandlers.onUnhandledRejection);
+  process.off('uncaughtException', processErrorHandlers.onUncaughtException);
   ctx.clients.clear();
   await stopLifecycle(true);
   runLogger.log('server_stop', {});
@@ -174,7 +221,7 @@ export async function teardownE2E(): Promise<void> {
 }
 
 /**
- * Access the running sync-test server: Mongo URI, port, and helpers to read or clear data.
+ * Access the running e2e server: Mongo URI, port, and helpers to read or clear data.
  */
 export function useServer(): E2EServerAccess {
   const { lifecycle } = requireCtx();
@@ -187,9 +234,9 @@ export function useServer(): E2EServerAccess {
     stopServer: () => lifecycle.stopServer(),
     restartServer: () => lifecycle.restartServer(),
     readLiveRecords: () => readServerRecords(mongoUri),
-    readAudits: (liveCollectionName = syncTestCollection.name) =>
+    readAudits: (liveCollectionName = e2eTestCollection.name) =>
       readServerAuditDocuments(mongoUri, liveCollectionName),
-    clearStoredCollectionData: () => clearSyncTestCollections(mongoUri),
+    clearStoredCollectionData: () => clearE2eTestCollections(mongoUri),
     waitForLiveRecord: async (recordId, options) => {
       const timeoutMs = options?.timeoutMs ?? 30_000;
       const intervalMs = options?.intervalMs ?? 50;
@@ -209,6 +256,21 @@ export function useServer(): E2EServerAccess {
 }
 
 /**
+ * Access the run logger created by {@link setupE2E}. Use for custom test-level event logging.
+ */
+export function useRunLogger(): RunLogger {
+  return requireCtx().runLogger;
+}
+
+/**
+ * Count of `app_logger` run-log lines at error level since {@link setupE2E} (e.g. `Logger.error` from clients).
+ * Use in stress / integration tests to fail when the app reported errors during the run.
+ */
+export function getAppLoggerErrorCount(): number {
+  return requireCtx().appLoggerErrorStats.count;
+}
+
+/**
  * Return a named client, creating it on first use. Each label gets a stable logical name until
  * {@link resetE2E} or {@link teardownE2E}, which unmount and drop the client so the next
  * `useClient` builds a new one.
@@ -219,7 +281,8 @@ export function useClient(label: string): E2EClientHandle {
   let entry = c.clients.get(label);
   if (entry == null) {
     const dbName = clientDbName(label);
-    const raw = createSyncClient(`e2e-${label}`, e2eForwardingRunLogger, { dbName });
+    const encryptionKey = crypto.getRandomValues(new Uint8Array(32));
+    const raw = createSyncClient(`e2e-${label}`, e2eForwardingRunLogger, { dbName, encryptionKey });
     entry = { dbName, raw };
     c.clients.set(label, entry);
   }

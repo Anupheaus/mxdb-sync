@@ -1,17 +1,21 @@
 import { mxdbDistinctSubscription } from '../../common';
 import { useCollection } from '../collections';
+import { useServerToClientSync } from '../providers';
 import { createServerCollectionSubscription } from './createServerCollectionSubscription';
 import { pushSubscriptionResultRecords } from './pushSubscriptionResultRecords';
 
 export const serverDistinctSubscription = createServerCollectionSubscription()(mxdbDistinctSubscription,
   async ({ request: { collectionName, ...request }, previousResponse, subscriptionId, update, onUnsubscribe }) => {
     const { collection, distinct, onChange, removeOnChange } = useCollection(collectionName);
+    // Capture at subscription-setup time. onChange callbacks fire from the MongoDB change stream
+    // outside any ALS context, so useServerToClientSync() there returns the no-op instance.
+    const { pushRecordsToClient } = useServerToClientSync();
 
     const runDistinct = () => distinct(request);
 
     async function refreshDistinctAndPushToSubscriber(): Promise<string[]> {
       const records = await runDistinct();
-      await pushSubscriptionResultRecords(collection, records, []);
+      await pushSubscriptionResultRecords(collection, records, [], pushRecordsToClient);
       return records.ids();
     }
 

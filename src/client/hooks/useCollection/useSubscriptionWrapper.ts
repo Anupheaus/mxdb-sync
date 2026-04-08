@@ -5,7 +5,7 @@ import type { UseSubscription } from './createUseSubscription';
 import type { SocketAPIAction, SocketAPISubscription } from '@anupheaus/socket-api/common';
 import { useLayoutEffect, useRef } from 'react';
 import { DateTime } from 'luxon';
-import type { AddDebugTo, AddDisableTo } from '../../../common/models';
+import type { AddDisableTo } from '../../../common/models';
 import { ACTION_TIMEOUT_MS, withTimeout } from '../../utils/actionTimeout';
 
 const RequestCancelled = Symbol('RequestCancelled');
@@ -50,18 +50,18 @@ export function useSubscriptionWrapper<RecordType extends Record, Request extend
   // listen to changes from the client collection and invoke again when it changes
   useLayoutEffect(() => collection.onChange(() => executeValidateAndUpdateRef.current()), []);
 
-  async function invoke(props: AddDebugTo<AddDisableTo<Request>>, onResponse: (result: Response) => void, onSameResponse: () => void): Promise<void>;
-  async function invoke(props: AddDebugTo<AddDisableTo<Request>>, onResponse: (result: Response) => void): Promise<void>;
-  async function invoke(props: AddDebugTo<AddDisableTo<Request>>): Promise<Response>;
-  async function invoke(props: AddDebugTo<AddDisableTo<Request>>, onResponse?: (result: Response) => void, onSameResponse?: () => void): Promise<void | Response> {
-    const { disable, debug, ...rest } = props;
+  async function invoke(props: AddDisableTo<Request>, onResponse: (result: Response) => void, onSameResponse: () => void): Promise<void>;
+  async function invoke(props: AddDisableTo<Request>, onResponse: (result: Response) => void): Promise<void>;
+  async function invoke(props: AddDisableTo<Request>): Promise<Response>;
+  async function invoke(props: AddDisableTo<Request>, onResponse?: (result: Response) => void, onSameResponse?: () => void): Promise<void | Response> {
+    const { disable, ...rest } = props;
     const request = rest as Request;
     const isActionRequired = !is.function(onResponse);
 
     const execute = async () => {
-      if (debug) console.log('[MXDB-Sync] Executing query locally', { disable, request }); // eslint-disable-line no-console
+      logger.silly('Executing query locally', { disable, request });
       if (disable) {
-        if (debug) console.log('[MXDB-Sync] Query is disabled, returning default', { disable, request }); // eslint-disable-line no-console        
+        logger.silly('Query is disabled, returning default', { disable, request });
         return onDefaultResponse();
       }
       const requestId = lastRequestIdRef.current = Math.uniqueId();
@@ -76,7 +76,7 @@ export function useSubscriptionWrapper<RecordType extends Record, Request extend
       } else {
         logger.debug(`[${requestId}] Query on collection "${collection.name}" completed (time taken: ${timeTaken}ms).`);
       }
-      if (debug) console.log('[MXDB-Sync] Finished executing query locally', { disable, request, response }); // eslint-disable-line no-console
+      logger.silly('Finished executing query locally', { disable, request, response });
       return response;
     };
 
@@ -91,7 +91,7 @@ export function useSubscriptionWrapper<RecordType extends Record, Request extend
       if (!okToExecute()) return;
       const result = await execute();
       if (result === RequestCancelled) {
-        if (debug) console.log('[MXDB-Sync] Request cancelled, so not validating and updating', { disable, request }); // eslint-disable-line no-console
+        logger.silly('Request cancelled, so not validating and updating', { disable, request });
         return;
       }
       validateAndUpdate(result);
@@ -102,24 +102,23 @@ export function useSubscriptionWrapper<RecordType extends Record, Request extend
       if (!okToExecute()) return;
       const resultHash = Object.hash(response);
       if (lastResultHashRef.current === resultHash) {
-        if (debug) console.log('[MXDB-Sync] Result has not changed, so calling onSameResponse', { disable, request }); // eslint-disable-line no-console
+        logger.silly('Result has not changed, so calling onSameResponse', { disable, request });
         onSameResponse?.();
         return;
       }
-      if (debug) console.log('[MXDB-Sync] Result has changed, so calling onResponse', { disable, request }); // eslint-disable-line no-console
+      logger.silly('Result has changed, so calling onResponse', { disable, request });
       lastResultHashRef.current = resultHash;
       onResponse?.(response);
     };
 
-    if (debug) console.log('[MXDB-Sync] Invoking remote query', { disable, isActionRequired, request }); // eslint-disable-line no-console
+    logger.silly('Invoking remote query', { disable, isActionRequired, request });
     remoteQueryCalledRef.current = await withTimeout(
       remoteInvoke({
         request: (onRequestTransform?.(request) ?? request) as RemoteRequest,
         disable: disable || isActionRequired,
-        debug,
         onEmptyUpdate: onRemoteDefaultResponse,
         onUpdate: async response => {
-          if (debug) console.log('[MXDB-Sync] Received remote query response', { disable, isActionRequired, request, response }); // eslint-disable-line no-console
+          logger.silly('Received remote query response', { disable, isActionRequired, request, response });
           await onRemoteResponse?.(response);
           await executeValidateAndUpdate();
           remoteQueryCalledRef.current = false;
@@ -130,21 +129,21 @@ export function useSubscriptionWrapper<RecordType extends Record, Request extend
     );
 
     if (isActionRequired) {
-      if (debug) console.log('[MXDB-Sync] Invoking action', { disable, isActionRequired, request }); // eslint-disable-line no-console
+      logger.silly('Invoking action', { disable, isActionRequired, request });
       const result = await withTimeout(
         actionResult[action.name]((onRequestTransform?.(request) ?? request) as RemoteRequest),
         ACTION_TIMEOUT_MS,
         `${action.name}(${collection.name})`,
       );
-      if (debug) console.log('[MXDB-Sync] Received action response', { disable, isActionRequired, request, result }); // eslint-disable-line no-console
+      logger.silly('Received action response', { disable, isActionRequired, request, result });
       await onRemoteResponse?.(result);
     }
 
     let result = await execute();
-    if (debug) console.log('[MXDB-Sync] Finished calling local execute', { disable, isActionRequired, request, result, remoteQueryCalled: remoteQueryCalledRef.current }); // eslint-disable-line no-console
+    logger.silly('Finished calling local execute', { disable, isActionRequired, request, result, remoteQueryCalled: remoteQueryCalledRef.current });
     if (result === RequestCancelled) result = onDefaultResponse();
     if (!remoteQueryCalledRef.current) {
-      if (debug) console.log('[MXDB-Sync] Validating and updating result after local execution', { disable, isActionRequired, request, result }); // eslint-disable-line no-console
+      logger.silly('Validating and updating result after local execution', { disable, isActionRequired, request, result });
       validateAndUpdate(result);
     }
 

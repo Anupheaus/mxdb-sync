@@ -66,7 +66,30 @@ MXDB-Sync is a real-time synchronization library for MongoDB-backed collections 
 2. If connected, changes sent to server
 3. If disconnected, changes queued for sync
 4. On reconnect, synchronization process runs
-5. Conflict resolution using audit trails and timestamps
+5. Conflict resolution using ULID-based last-write-wins (audit entry ULID, NOT any record field)
+
+## Conflict Resolution: ULID-Based Last-Write-Wins
+
+**The ONLY mechanism for conflict resolution is the ULID of the audit entry.** The entry with the highest ULID (latest real-world write time) wins when two writes conflict.
+
+- `replayHistoryEndState` in `src/common/auditor/replay.ts` sorts all audit entries by ULID and applies them in order. The last applied state is the record's final value.
+- `audit.merge` in `src/common/auditor/api.ts` merges server + client audits by deduplicating and sorting all entries by ULID.
+- **Record fields like `testDate` (or any other application-level field) have NO effect on conflict resolution.** They are arbitrary data stored on the record. Only the ULID of the audit entry matters.
+- `testDate` on `E2eTestRecord` is an optional test-only field — it is explicitly NOT used by the sync system for ordering or conflict resolution.
+
+## Deletion and Restoration Behaviour
+
+**Updates after a deletion do NOT restore a record.** When an `Updated` entry has a higher ULID than a `Deleted` entry, the record remains deleted. The `Updated` entry is still applied to the `shadow` state (preserving the changes), but `live` stays `undefined` until an explicit `Restored(3)` entry is present.
+
+**Restoration is a separate, manual process that has not been implemented yet.** A user who wants to un-delete a record must explicitly apply a `Restored` audit entry. There is currently no automatic restoration pathway — not from concurrent updates, not from conflict resolution. Only `AuditEntryType.Restored` (3) can bring a record back from `live=undefined` to a live state.
+
+**Clients may still send C2S updates for a record after receiving it in `removedIds`.** If the local audit has pending changes (entries after the last Branched anchor) at the time the S2C deletion arrives, the S2C handler skips the deletion and keeps the local record. This is expected and intentional — the pending changes cannot be discarded until they have been pushed to the server and acknowledged. The flow is:
+1. S2C deletion arrives → client has `hasPendingChanges=true` → deletion skipped, record retained locally
+2. Client sends pending changes via C2S sync
+3. Server ACKs the update (the record appears in `successfulRecordIds` even though the server sees it as deleted — no error is set for a deleted record result)
+4. Client collapses audit to a `Branched(4)` anchor → `hasPendingChanges=false`
+5. Server fires a follow-up S2C deletion (fire-and-forget from the C2S handler) to this specific client
+6. S2C deletion re-arrives after the C2S gate opens → `hasPendingChanges=false` → deletion proceeds
 
 ## Sync Test Infrastructure
 
@@ -122,7 +145,7 @@ The sync test is failing due to **extra records on the server** that don't match
 - **Preserving audit records** - Never truncate or lose audit trail data
 - **Maintaining referential integrity** - Ensure cascading updates don't orphan data
 - **Atomic operations** - Changes should be all-or-nothing to prevent partial states
-- **Conflict resolution** - Audit trails enable proper last-write-wins resolution
+- **Conflict resolution** - ULID-based last-write-wins: the audit entry with the highest ULID wins; record fields like `testDate` have no effect on conflict resolution
 
 **Audit Record Preservation**: When making any changes to this library:
 - Never remove or modify existing audit trail entries

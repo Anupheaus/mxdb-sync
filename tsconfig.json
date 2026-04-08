@@ -50,7 +50,8 @@
   },
   "include": [
     "src/**/*",
-    "test/**/*"
+    "test/**/*",
+    "tests/**/*"
   ],
   "exclude": [
     "dist",

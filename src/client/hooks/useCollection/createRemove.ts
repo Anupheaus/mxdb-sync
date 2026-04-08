@@ -18,7 +18,14 @@ export function createRemove<RecordType extends Record>(dbCollection: DbCollecti
     const recordIds: string[] = recordsOrIds.map(record => is.string(record) ? record : record.id);
     if (recordIds.length === 0) return;
     logger.debug('Removing records...', { recordIds });
-    await dbCollection.delete(recordIds, { auditAction: props?.locallyOnly === true ? 'remove' : 'default' });
+    const locallyOnly = props?.locallyOnly === true;
+    await dbCollection.delete(recordIds, locallyOnly ? { skipAuditAppend: true } : undefined);
+    if (locallyOnly) {
+      await dbCollection.removeAuditTrail(recordIds);
+      dbCollection.notifyRemove(recordIds, 'remove');
+    } else {
+      dbCollection.notifyRemove(recordIds, 'markAsDeleted');
+    }
     logger.debug('Removed records.');
   }
 

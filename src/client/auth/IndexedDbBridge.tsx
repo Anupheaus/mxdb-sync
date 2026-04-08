@@ -59,17 +59,28 @@ export const IndexedDbBridge = createComponent('IndexedDbBridge', ({ host, name,
       return;
     }
     (async () => {
-      const entry = await IndexedDbAuthStore.getDefault(name);
-      setActiveEntry(entry);
-      setConnectionToken(entry?.token);
-      setConnectionKeyHash(entry?.keyHash);
-      if (entry != null) {
-        // Derive the encryption key before rendering DbsProvider so the DB
-        // is opened with the correct key on the very first mount.
-        const key = await deriveEncryptionKey(entry.credentialId);
-        setEncryptionKey(key);
+      try {
+        const entry = await IndexedDbAuthStore.getDefault(name);
+        setActiveEntry(entry);
+        setConnectionToken(entry?.token);
+        setConnectionKeyHash(entry?.keyHash);
+        if (entry != null) {
+          // Derive the encryption key before rendering DbsProvider so the DB
+          // is opened with the correct key on the very first mount.
+          // deriveEncryptionKey always throws on failure — unencrypted storage
+          // is never permitted.
+          const key = await deriveEncryptionKey(entry.credentialId);
+          setEncryptionKey(key);
+        }
+        setLoaded(true);
+      } catch (err) {
+        onError?.({
+          code: 'ENCRYPTION_FAILED',
+          message: err instanceof Error ? err.message : 'Failed to derive encryption key',
+          severity: 'fatal',
+          originalError: err,
+        });
       }
-      setLoaded(true);
     })();
   }, [name]);
 

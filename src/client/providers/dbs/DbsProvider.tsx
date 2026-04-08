@@ -27,6 +27,9 @@ export const DbsProvider = createComponent('DbsProvider', ({
   const existingContext = useContext(DbsContext);
 
   const context = useMemo<DbsContextProps>(() => {
+    if (encryptionKey == null) {
+      throw new Error('MXDB: DbsProvider requires an encryptionKey — unencrypted local storage is not permitted. Derive a key via WebAuthn PRF (deriveEncryptionKey) before opening the database.');
+    }
     dbs.close(name);
     const configurations = collections.map(collection => configRegistry.getOrError(collection));
     const db = dbs.open(name, configurations, encryptionKey, logger);

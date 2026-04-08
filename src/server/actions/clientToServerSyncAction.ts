@@ -78,6 +78,49 @@ export const clientToServerSyncAction = createServerActionHandler(mxdbClientToSe
           const removedIds = Array.from(removeIds);
           const updatedAudits = Array.from(updateAuditsMap.values());
 
+          // Resurrection guard: if processUpdates decided to write a live record but the server
+          // concurrently deleted it between our initial reads and now, re-run processUpdates with
+          // the fresh (post-deletion) audit. This lets LWW decide correctly:
+          //   - if all client entry ULIDs predate the deletion ULID → deletion wins, no write
+          //   - if a client entry ULID postdates the deletion ULID → resurrection is correct
+          if (updated.length > 0) {
+            const freshAudit = await dbCollection.getAudit(update.recordId);
+            if (freshAudit != null && auditor.isDeleted(freshAudit)) {
+              const freshRecord = await dbCollection.get(update.recordId); // should be null, but read for correctness
+              const freshRemoveIds = new Set<string>();
+              const freshUpdateRecords = new Map<string, Record>();
+              const freshUpdateAudits = new Map<string, AnyAuditOf<Record>>();
+              const freshResults = new Map<string, Omit<MXDBSyncIdResult, 'id'>>();
+              const freshRemovedForClient = new Set<string>();
+              processUpdates({
+                audit,
+                audits: [clientAudit],
+                existingAudits: [freshAudit],
+                existingRecords: freshRecord != null ? [freshRecord] : [],
+                logger,
+                collectionName: item.collectionName,
+                updateAudits: freshUpdateAudits,
+                removeIds: freshRemoveIds,
+                updateRecords: freshUpdateRecords,
+                results: freshResults,
+                removedIdsForClient: freshRemovedForClient,
+              });
+              const freshUpdated = Array.from(freshUpdateRecords.values());
+              const freshRemovedIds = Array.from(freshRemoveIds);
+              const freshUpdatedAudits = Array.from(freshUpdateAudits.values());
+              if (freshUpdated.length > 0 || freshUpdatedAudits.length > 0 || freshRemovedIds.length > 0) {
+                const writeResults = await dbCollection.sync({ updated: freshUpdated, updatedAudits: freshUpdatedAudits, removedIds: freshRemovedIds });
+                for (const wr of writeResults) {
+                  if (wr.error != null) {
+                    logger.error(`C2S permanent I/O failure for record "${wr.id}"`, { error: wr.error });
+                    freshResults.set(wr.id, { error: wr.error });
+                  }
+                }
+              }
+              return { updated: freshUpdated, removedIds: freshRemovedIds, results: freshResults };
+            }
+          }
+
           if (updated.length > 0 || updatedAudits.length > 0 || removedIds.length > 0) {
             const writeResults = await dbCollection.sync({ updated, updatedAudits, removedIds });
             for (const wr of writeResults) {

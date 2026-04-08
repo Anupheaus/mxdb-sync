@@ -21,14 +21,14 @@ certs
 .env
 *.env
 
-# Sync test logs (nanosecond-timestamped run logs)
-tests/sync-test/logs/
+# Stress test logs (nanosecond-timestamped run logs)
+tests/e2e/stress/logs/
 
-# E2E run logs (same format as sync-test)
+# E2E run logs (same format as stress tests)
 tests/e2e/logs/
 
 # Never commit private keys / local cert material
 *.key
 *.pem
-tests/sync-test/certs/
+tests/e2e/setup/certs/
 2048

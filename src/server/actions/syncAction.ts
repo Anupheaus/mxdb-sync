@@ -38,11 +38,6 @@ export function processUpdates({
     } else {
       const cleaned = audit.filterValidEntries(audit.entriesOf(clientAudit) as any[], logger);
       const cleanClient = { id: clientAudit.id, entries: cleaned };
-      logger.debug(`[sync-diag] merge input "${clientAudit.id.slice(0, 8)}" existingEntries=${audit.entriesOf(existingAudit as any).length} clientEntries=${cleaned.length}`, {
-        existingTypes: audit.entriesOf(existingAudit as any).map((e: any) => `${e.type}:${e.id}`),
-        clientTypes: cleaned.map((e: any) => `${e.type}:${e.id}`),
-        clientAuditValid: audit.isAudit(cleanClient, logger),
-      });
       try {
         mergedAudit = audit.merge(existingAudit, cleanClient, logger);
       } catch (err) {
@@ -54,10 +49,6 @@ export function processUpdates({
     updateAudits.set(mergedAudit.id, mergedAudit);
 
     const existingRecord = existingRecords.findById(mergedAudit.id);
-    const mergedEntries = audit.entriesOf(mergedAudit as any);
-    logger.debug(`[sync-diag] replay "${mergedAudit.id.slice(0, 8)}" entries=${mergedEntries.length} hasExisting=${existingRecord != null}`, {
-      entryTypes: mergedEntries.map((e: any) => `${e.type}:${e.id}`),
-    });
     let materialized: Record | undefined;
     try {
       materialized = audit.createRecordFrom(mergedAudit, existingRecord ?? undefined, logger);
@@ -65,8 +56,6 @@ export function processUpdates({
       logger.error(`§6.9#5 Replay failed for "${mergedAudit.id}" in "${collectionName}"`, { err });
       return;
     }
-    logger.debug(`[sync-diag] replay result "${mergedAudit.id.slice(0, 8)}" tags=${JSON.stringify((materialized as any)?.tags)}`);
-
     const auditEntryId = audit.getLastEntryId(mergedAudit);
 
     const clientWantsLive = !audit.isDeleted(clientAudit);

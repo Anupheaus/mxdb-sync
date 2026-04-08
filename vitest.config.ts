@@ -16,8 +16,16 @@ export default defineConfig({
   },
   test: {
     environment: 'node',
-    include: ['src/**/*.test.ts', 'src/**/*.test.tsx'],
+    include: [
+      'src/**/*.tests.ts',
+      'src/**/*.tests.tsx',
+      '*.unit.tests.ts',
+      '*.unit.tests.tsx',
+      '**/*.unit.tests.ts',
+      '**/*.unit.tests.tsx',
+    ],
     globals: true,
-    setupFiles: ['./vitest.setup.ts'],
+    setupFiles: ['./tests/e2e/setup/e2eVitestSetup.ts', './tests/e2e/setup/vitestGlobals.ts'],
+    //setupFiles: ['./vitest.setup.ts'],
   },
 });

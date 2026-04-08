@@ -60,9 +60,10 @@
     "start": "webpack --mode development",
     "server": "webpack --mode development --name server",
     "client": "webpack --mode development --name client --profile",
-    "test": "vitest --environment jsdom",
-    "test:sync": "vitest run --config vitest.sync.config.ts",
-    "test:e2e": "vitest run --config vitest.e2e.config.ts"
+    "test": "vitest",
+    "test:crud": "vitest run --config vitest.e2e.config.ts --mode crud",
+    "test:performance": "vitest run --config vitest.e2e.config.ts --mode performance",
+    "test:stress": "vitest run --config vitest.e2e.config.ts --mode stress"
   },
   "files": [
     "dist",
@@ -91,6 +92,7 @@
     "ulidx": "^2.4.1"
   },
   "devDependencies": {
+    "@types/jsdom": "^28.0.1",
     "@types/koa": "^2.13.5",
     "@types/koa-bodyparser": "^4.3.12",
     "@types/koa-router": "^7.4.8",

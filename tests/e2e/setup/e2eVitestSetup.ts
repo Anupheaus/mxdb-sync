@@ -5,42 +5,36 @@
 import { vi } from 'vitest';
 
 vi.mock('@anupheaus/common', async importOriginal => {
-  const { getE2eRunLogger } = await import('./e2eRunLoggerSink');
+  const { getE2eRunLogger } = await import('./runLogger');
   const actual = (await importOriginal()) as Record<string, unknown>;
   // eslint-disable-next-line @typescript-eslint/consistent-type-imports -- avoid `import()` type in cast
   const RealLogger = actual.Logger as typeof import('@anupheaus/common').Logger;
 
-  class E2eVitestLogger extends RealLogger {
-    public override createSubLogger(name: string, settings?: unknown): InstanceType<typeof RealLogger> {
-      const subLogger = new E2eVitestLogger(name, settings as ConstructorParameters<typeof RealLogger>[1]);
-      (subLogger as unknown as { parent: InstanceType<typeof RealLogger> | undefined; }).parent = this;
-      return subLogger;
-    }
+  // Force all Logger instances in this process to log at silly level (0) regardless of env vars.
+  Object.defineProperty(RealLogger.prototype, 'getMinLevel', {
+    value: () => 0,
+    writable: true,
+    configurable: true,
+  });
 
-    protected override report(
-      level: number,
-      message: string,
-      meta?: Record<string, unknown>,
-      _ignoreLevel = false,
-    ): void {
+  RealLogger.registerListener({
+    maxEntries: 1,
+    onTrigger(entries) {
       const lr = getE2eRunLogger();
-      if (lr != null) {
-        const loggerPath = this.allNames.join(' > ');
+      if (lr == null) return;
+      for (const entry of entries) {
+        const loggerPath = entry.names.join(' > ');
         lr.log('app_logger', {
-          level: RealLogger.getLevelAsString(level),
-          message,
+          level: RealLogger.getLevelAsString(entry.level),
+          message: entry.message,
           ...(loggerPath.length > 0 ? { logger: loggerPath } : {}),
-          ...(meta != null && typeof meta === 'object' && Object.keys(meta).length > 0 ? { meta } : {}),
+          ...(entry.meta != null && typeof entry.meta === 'object' && Object.keys(entry.meta).length > 0 ? { meta: entry.meta } : {}),
         });
       }
-      super.report(level, message, meta, true);
-    }
-  }
+    },
+  });
 
-  return {
-    ...actual,
-    Logger: E2eVitestLogger,
-  };
+  return actual;
 });
 
 vi.mock('../../../src/client/utils/actionTimeout', async importOriginal => {

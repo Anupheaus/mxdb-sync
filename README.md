@@ -20,6 +20,8 @@ Full documentation lives in **`docs/`** in this repo and is **included in the np
 
 Deeper design and sync specifications: **`docs/plans/`** (see the index in **`docs/README.md`**).
 
+**[Sync Engine](src/common/sync-engine/readme.md)** — living reference for the four-component sync protocol (ClientDispatcher, ServerReceiver, ServerDispatcher, ClientReceiver).
+
 **[agent.md](agent.md)** (repo root) — short orientation for contributors and AI assistants.
 
 ## Package exports
@@ -279,6 +281,8 @@ pnpm test:crud      # CRUD e2e tests
 pnpm test:performance  # performance e2e tests
 pnpm test:stress    # stress / data-integrity tests
 ```
+
+See **[tests/e2e/stress/README.md](tests/e2e/stress/README.md)** for a detailed explanation of how the stress tests work.
 
 ## License
 

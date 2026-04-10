@@ -17,12 +17,12 @@ describe('handleQuery', () => {
   const collection = { name: 'items' };
   const mockQuery = vi.fn();
   const mockDbCollection = { collection, query: mockQuery };
-  const mockSeedActive = vi.fn();
+  const mockPushActive = vi.fn();
 
   beforeEach(() => {
     vi.clearAllMocks();
     mockUseDb.mockReturnValue({ use: () => mockDbCollection });
-    mockUseServerToClientSynchronisation.mockReturnValue({ seedActive: mockSeedActive });
+    mockUseServerToClientSynchronisation.mockReturnValue({ pushActive: mockPushActive });
   });
 
   it('returns empty array when query returns no records', async () => {
@@ -31,18 +31,18 @@ describe('handleQuery', () => {
     expect(result).toEqual([]);
   });
 
-  it('calls seedActive and returns total', async () => {
+  it('calls pushActive and returns total', async () => {
     const records = withIds([{ id: '1', name: 'a' }]);
     mockQuery.mockResolvedValue({ data: records, total: 1 });
     const result = await handleQuery({ collectionName: 'items' });
-    expect(mockSeedActive).toHaveBeenCalledWith('items', records);
+    expect(mockPushActive).toHaveBeenCalledWith('items', records);
     expect(result).toBe(1);
   });
 
-  it('does not call seedActive when no records returned', async () => {
+  it('does not call pushActive when no records returned', async () => {
     mockQuery.mockResolvedValue({ data: [], total: 0 });
     await handleQuery({ collectionName: 'items' });
-    expect(mockSeedActive).not.toHaveBeenCalled();
+    expect(mockPushActive).not.toHaveBeenCalled();
   });
 
   it('passes extra query parameters to dbCollection.query', async () => {

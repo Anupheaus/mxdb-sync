@@ -53,6 +53,17 @@ export class ClientReceiver {
       recordIds: col.records.map(c => getCursorId(c)),
     }));
 
+    // [cr-diag] Log the incoming payload shape (collection → id:kind[:lastAuditEntryId]) so
+    // stress-test post-mortems can correlate CR decisions with the actual cursor arrivals.
+    for (const col of payload) {
+      const summary = col.records.map(c => {
+        const id = getCursorId(c);
+        if (isActiveCursor(c)) return `${id}:A:${c.lastAuditEntryId}`;
+        return `${id}:D`;
+      }).join(',');
+      this.#logger.silly(`[cr-diag] process "${col.collectionName}" cursors=[${summary}]`);
+    }
+
     // Step 2: Retrieve local states
     const localStates = this.#props.onRetrieve<T>(request);
 
@@ -132,7 +143,20 @@ export class ClientReceiver {
         const branchOnly = auditor.isBranchOnly(localAudit);
 
         if (!branchOnly) {
-          // Has pending local changes — skip; CD will merge via C2S
+          // Has pending local changes.
+          // Delete-is-final: a delete cursor always wins, even over pending C2S changes —
+          // once the server tombstones a record, the client's pending updates are moot
+          // (the SR would reject them anyway). Write a local tombstone so subsequent
+          // active cursors cannot resurrect the record.
+          if (!isActiveCursor(cursor)) {
+            this.#logger.debug(`[CR] applying delete cursor ${id} in ${colName} over pending local changes — delete-is-final`);
+            if (!updatesByCollection.has(colName)) {
+              updatesByCollection.set(colName, { records: [], deletedRecordIds: [] });
+            }
+            updatesByCollection.get(colName)!.deletedRecordIds.push(id);
+            continue;
+          }
+          // Active cursor with pending local changes — skip; CD will merge via C2S
           this.#logger.debug(`[CR] skipping cursor ${id} in ${colName} — local audit has pending changes`);
           continue;
         }

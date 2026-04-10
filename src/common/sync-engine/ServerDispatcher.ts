@@ -1,16 +1,38 @@
 import type { Logger, Record as MXDBRecord } from '@anupheaus/common';
 import {
   type MXDBRecordCursors,
+  type MXDBActiveRecordCursor,
+  type MXDBDeletedRecordCursor,
   type MXDBSyncEngineResponse,
   type ServerDispatcherFilter,
-  type ServerDispatcherFilterRecord,
   SyncPausedError,
 } from './models';
-import { isActiveCursor, isDeletedCursor, getCursorId, squashCursors } from './utils';
+import { isActiveCursor, isDeletedCursor, getCursorId } from './utils';
 
 interface ServerDispatcherProps {
   onDispatch<T extends MXDBRecord>(payload: MXDBRecordCursors<T>): Promise<MXDBSyncEngineResponse>;
   retryInterval?: number;
+}
+
+/**
+ * One queue entry = one `push(...)` call. The `addToFilter` flag is tracked per batch
+ * and then propagated to the squashed per-cursor view at dispatch time.
+ *
+ *  - `true`: "authoritative" push (getAll / query / get / SR merge result). On success
+ *    the record gets added to `#filter` (CR is now known to have it).
+ *  - `false`: change-stream-style push. The record must already be in `#filter` for the
+ *    cursor to be sent at all — change-stream fan-out is not allowed to bootstrap
+ *    records the CR has never acknowledged.
+ */
+interface QueuedBatch {
+  cursors: MXDBRecordCursors;
+  addToFilter: boolean;
+}
+
+/** Per-cursor view produced by the flag-aware squash step. */
+interface TaggedCursor {
+  cursor: MXDBActiveRecordCursor | MXDBDeletedRecordCursor;
+  addToFilter: boolean;
 }
 
 export class ServerDispatcher {
@@ -19,7 +41,7 @@ export class ServerDispatcher {
   #isPaused = false;
   #inFlight = false;
   #retryTimer: ReturnType<typeof setTimeout> | undefined = undefined;
-  #queue: MXDBRecordCursors[] = [];
+  #queue: QueuedBatch[] = [];
   #filter: ServerDispatcherFilter[] = [];
   #deletedRecordIds: Map<string, Set<string>> = new Map();
 
@@ -44,6 +66,15 @@ export class ServerDispatcher {
     }
   }
 
+  /**
+   * SR-only entry point for seeding the filter without dispatching. Used by the
+   * ServerReceiver to register branched-only acknowledgements and "client already
+   * up to date" records so that future deletes/updates can pass the filter check.
+   *
+   * No other caller should use this — getAll/query/get/subscription paths and the
+   * MongoDB change stream must go through {@link push}. The filter is otherwise
+   * managed internally by {@link #dispatch}'s success path.
+   */
   updateFilter(filters: ServerDispatcherFilter[]): void {
     for (const filterItem of filters) {
       const existing = this.#filter.find(f => f.collectionName === filterItem.collectionName);
@@ -54,7 +85,6 @@ export class ServerDispatcher {
           deletedRecordIds: filterItem.deletedRecordIds ? [...filterItem.deletedRecordIds] : undefined,
         });
       } else {
-        // Merge records — update or add, never remove
         for (const rec of filterItem.records) {
           const existingRec = existing.records.find(r => r.id === rec.id);
           if (existingRec == null) {
@@ -66,122 +96,213 @@ export class ServerDispatcher {
         }
       }
 
-      // Register deletedRecordIds
+      // If the client reports an active record (hash != null), clear any prior
+      // tombstone from #deletedRecordIds. This happens when a change-stream
+      // delete arrives before the client's CD.start() seeds the filter — the
+      // tombstone is recorded but the client hasn't been told yet. Without this
+      // clear, the subsequent authoritative delete cursor from the SR disparity
+      // path (addToFilter=true) hits the "confirmed-deleted" gate and is dropped,
+      // leaving the client with a stale local copy forever.
+      for (const rec of filterItem.records) {
+        if (rec.hash != null) {
+          const deletedSet = this.#deletedRecordIds.get(filterItem.collectionName);
+          if (deletedSet?.has(rec.id)) {
+            deletedSet.delete(rec.id);
+            this.#logger.debug(`[SD] updateFilter: cleared premature tombstone for ${rec.id} in ${filterItem.collectionName} — client reports active`);
+          }
+        }
+      }
+
       if (filterItem.deletedRecordIds && filterItem.deletedRecordIds.length > 0) {
         if (!this.#deletedRecordIds.has(filterItem.collectionName)) {
           this.#deletedRecordIds.set(filterItem.collectionName, new Set());
         }
         const deletedSet = this.#deletedRecordIds.get(filterItem.collectionName)!;
-        for (const id of filterItem.deletedRecordIds) {
-          deletedSet.add(id);
-        }
+        for (const id of filterItem.deletedRecordIds) deletedSet.add(id);
       }
     }
-    this.#logger.debug('[SD] filter updated');
+    this.#logger.debug('[SD] filter updated (SR seed)');
   }
 
-  push<T extends MXDBRecord>(request: MXDBRecordCursors<T>): void {
-    this.#queue.push(request as MXDBRecordCursors);
-    this.#logger.debug('[SD] push received, queue length=' + this.#queue.length);
+  /**
+   * Enqueue a cursor batch for dispatch to the CR.
+   *
+   * @param addToFilter
+   *   - `true` (default): authoritative push. On successful dispatch of an active
+   *     cursor, the record is added to `#filter` (the CR has now acknowledged it).
+   *     Use for getAll/query/get/subscription paths and the SR fan-out.
+   *   - `false`: change-stream-style push. On dispatch, cursors whose record is
+   *     NOT already in `#filter` are **dropped** — the CR hasn't acked the record
+   *     so change-stream fan-out cannot deliver an update for it. Use for the
+   *     MongoDB change stream.
+   */
+  push<T extends MXDBRecord>(request: MXDBRecordCursors<T>, addToFilter: boolean = true): void {
+    this.#queue.push({ cursors: request as MXDBRecordCursors, addToFilter });
+    this.#logger.debug(`[SD] push received (addToFilter=${addToFilter}), queue length=${this.#queue.length}`);
     if (!this.#isPaused && !this.#inFlight && this.#retryTimer == null) {
       void this.#dispatch();
     }
   }
 
+  /**
+   * Squash all queued batches into a single per-collection map of tagged cursors.
+   *
+   * Merge rules:
+   *   - Delete cursors always beat active cursors (delete-is-final).
+   *   - Between two active cursors, the one with the later `lastAuditEntryId` wins.
+   *   - On equal `lastAuditEntryId`, the LATER-enqueued cursor wins. Change-stream
+   *     events from Mongo are delivered in oplog (write) order, and `#buildAndPush`
+   *     reads the current audit's last entry id for each event — so under concurrent
+   *     writes, multiple events can race and produce cursors with the same
+   *     `lastAuditEntryId` but different `record` payloads (each capturing the
+   *     fullDocument at its own write point). The last-enqueued cursor reflects
+   *     the most recent oplog position and therefore the freshest record state.
+   *   - `addToFilter` flags OR together: if any batch for this record wanted to
+   *     add it to the filter, the merged cursor carries `addToFilter=true`. This
+   *     matches the user intent — an authoritative push must still succeed in
+   *     registering the record even if a change-stream batch squashed with it.
+   */
+  #squashQueue(): Map<string, Map<string, TaggedCursor>> {
+    const byCollection = new Map<string, Map<string, TaggedCursor>>();
+
+    for (const batch of this.#queue) {
+      for (const col of batch.cursors) {
+        if (!byCollection.has(col.collectionName)) {
+          byCollection.set(col.collectionName, new Map());
+        }
+        const colMap = byCollection.get(col.collectionName)!;
+        for (const cursor of col.records) {
+          const id = getCursorId(cursor);
+          const existing = colMap.get(id);
+          if (existing == null) {
+            colMap.set(id, { cursor, addToFilter: batch.addToFilter });
+            continue;
+          }
+          // OR the flags — authoritative wins over change-stream.
+          const mergedFlag = existing.addToFilter || batch.addToFilter;
+          if (isDeletedCursor(cursor)) {
+            colMap.set(id, { cursor, addToFilter: mergedFlag });
+          } else if (isActiveCursor(cursor) && !isDeletedCursor(existing.cursor)) {
+            // `>=` so the LATER-enqueued cursor wins on ties. See method doc: concurrent
+            // change-stream events can produce cursors with identical `lastAuditEntryId`
+            // but different record snapshots; the later arrival is the freshest.
+            if (cursor.lastAuditEntryId >= existing.cursor.lastAuditEntryId) {
+              colMap.set(id, { cursor, addToFilter: mergedFlag });
+            } else {
+              existing.addToFilter = mergedFlag;
+            }
+          } else {
+            // existing is a delete, cursor is an update — delete wins, just OR the flag
+            existing.addToFilter = mergedFlag;
+          }
+        }
+      }
+    }
+
+    return byCollection;
+  }
+
   async #dispatch(): Promise<void> {
-    // Step 1: Record queue length and squash
+    // Step 1: Snapshot queue length and squash
     const queueLength = this.#queue.length;
-    const squashed = squashCursors(this.#queue);
+    const squashed = this.#squashQueue();
 
     // Step 2: Filter against #filter and #deletedRecordIds
     const freshRequest: MXDBRecordCursors = [];
+    // Parallel bookkeeping: per (collectionName, recordId) → addToFilter flag, used in step 5
+    const flagsByCol = new Map<string, Map<string, boolean>>();
 
-    for (const col of squashed) {
-      const colName = col.collectionName;
+    for (const [colName, colMap] of squashed) {
       const filterItem = this.#filter.find(f => f.collectionName === colName);
       const deletedSet = this.#deletedRecordIds.get(colName);
-      const freshRecords: (typeof col.records[0])[] = [];
+      const freshRecords: (MXDBActiveRecordCursor | MXDBDeletedRecordCursor)[] = [];
+      const colFlags = new Map<string, boolean>();
 
-      for (const cursor of col.records) {
+      for (const { cursor, addToFilter } of colMap.values()) {
         const id = getCursorId(cursor);
+        const filterRec = filterItem?.records.find(r => r.id === id);
+        const inDeletedSet = deletedSet?.has(id) === true;
+
+        // Delete-is-final: anything targeting a confirmed-deleted id is skipped.
+        if (inDeletedSet) {
+          this.#logger.debug(`[SD] filter: drop ${isDeletedCursor(cursor) ? 'delete' : 'active'} for confirmed-deleted ${id} in ${colName}`);
+          continue;
+        }
 
         if (isDeletedCursor(cursor)) {
-          // Deletion cursor
-          if (filterItem == null) {
-            // Record not tracked in filter — send the delete anyway. The client may have
-            // acquired the record via another route (e.g. an earlier active cursor that
-            // squashed into this delete before being dispatched, or a broadcast received
-            // while this SD was paused). The CR gracefully handles "no local state" as
-            // already-consistent, so sending a redundant delete is safe.
-            this.#logger.debug(`[SD] filter: sending delete for unknown record ${id} in ${colName}`);
-            freshRecords.push(cursor);
-            continue;
-          }
-          const filterRec = filterItem.records.find(r => r.id === id);
           if (filterRec == null) {
-            // Collection known but record not tracked — same reasoning as above, send anyway.
-            this.#logger.debug(`[SD] filter: sending delete for record ${id} not in filter records`);
+            if (!addToFilter) {
+              // Change-stream fan-out cannot deliver a delete for a record the CR
+              // doesn't know about — drop the cursor itself. BUT we still commit the
+              // id to #deletedRecordIds so that any stale queued active cursors (or
+              // future authoritative pushes) for the same id are blocked. Once the
+              // server has tombstoned a record there is no legitimate way an active
+              // cursor for it can be sent to any client on this SD: `#buildAndPush`
+              // filters tombstoned records on the server side, so any active cursor
+              // still in our queue must have been built BEFORE the delete and is now
+              // stale. Without this guard those stale cursors leak through and
+              // resurrect the record on the CR. (Observed in stress tests where a
+              // client reconnected after a server restart, had several pre-delete
+              // active cursors queued for a record, then the delete fanned out via
+              // change-stream and was dropped here — the queued active cursors then
+              // dispatched and re-created the record on that client.)
+              this.#logger.debug(`[SD] filter: drop change-stream delete for unknown record ${id} in ${colName} — recording tombstone`);
+              if (!this.#deletedRecordIds.has(colName)) {
+                this.#deletedRecordIds.set(colName, new Set());
+              }
+              this.#deletedRecordIds.get(colName)!.add(id);
+              continue;
+            }
+            // Authoritative delete for unknown record — send anyway (e.g. query result
+            // discovered the record was deleted and wants the CR to know).
+            this.#logger.debug(`[SD] filter: send authoritative delete for unknown record ${id} in ${colName}`);
             freshRecords.push(cursor);
-            continue;
-          }
-          if (filterRec.hash == null) {
-            // Pending deletion: compare and pick latest
+          } else if (filterRec.hash == null) {
+            // Pending deletion — pick the latest ULID between the cursor and the filter's
+            // existing pending-delete marker.
             if (cursor.lastAuditEntryId >= filterRec.lastAuditEntryId) {
               freshRecords.push(cursor);
             } else {
               freshRecords.push({ recordId: id, lastAuditEntryId: filterRec.lastAuditEntryId });
             }
           } else {
-            // Normal filter record with hash: send deletion
+            // Normal filter record with hash: send the deletion.
             freshRecords.push(cursor);
           }
+          colFlags.set(id, addToFilter);
         } else {
-          // Update cursor
-          if (filterItem == null) {
-            // No filter for this collection
-            if (deletedSet?.has(id)) {
-              // Already confirmed deleted on client — skip
-              this.#logger.debug(`[SD] filter: skip update for confirmed-deleted record ${id} in ${colName}`);
+          // Active cursor
+          if (filterRec == null) {
+            if (!addToFilter) {
+              // Change-stream update for a record the CR doesn't know about — drop.
+              this.#logger.debug(`[SD] filter: drop change-stream update for unknown record ${id} in ${colName}`);
               continue;
             }
-            // Not in deletedRecordIds — send
+            // Authoritative push of a new record — send.
             freshRecords.push(cursor);
+          } else if (filterRec.hash == null) {
+            // Pending deletion — re-send the delete cursor rather than the update.
+            this.#logger.debug(`[SD] filter: re-send pending deletion for ${id} in ${colName}`);
+            freshRecords.push({ recordId: id, lastAuditEntryId: filterRec.lastAuditEntryId });
           } else {
-            const filterRec = filterItem.records.find(r => r.id === id);
-            if (filterRec == null) {
-              // Not in filter records
-              if (deletedSet?.has(id)) {
-                // Already confirmed deleted on client — skip
-                this.#logger.debug(`[SD] filter: skip update for confirmed-deleted record ${id} in ${colName}`);
-                continue;
-              }
-              // Not confirmed deleted — send
-              freshRecords.push(cursor);
-            } else {
-              if (filterRec.hash == null) {
-                // Pending deletion — re-send the deletion cursor from filter
-                this.#logger.debug(`[SD] filter: re-sending pending deletion for ${id} in ${colName}`);
-                freshRecords.push({ recordId: id, lastAuditEntryId: filterRec.lastAuditEntryId });
-              } else if (deletedSet?.has(id)) {
-                // Confirmed deleted — skip
-                this.#logger.debug(`[SD] filter: skip update for confirmed-deleted record ${id} in ${colName}`);
-                continue;
-              } else {
-                // Compare hash and lastAuditEntryId — skip if client already up to date
-                // The MXDBActiveRecordCursor carries a hash from the SR via the push call.
-                // We store hash on the cursor when building it in SR (using the materialised record hash).
-                // The cursor in the SD queue is typed as MXDBActiveRecordCursor which has no hash field,
-                // but we attach one from SR via the push payload. Access it via type cast.
-                const cursorHash = (cursor as any).hash as string | undefined;
-                if (filterRec.hash === cursorHash && filterRec.lastAuditEntryId === cursor.lastAuditEntryId) {
-                  // Client is already up to date — skip
-                  this.#logger.debug(`[SD] filter: skip update — client already up to date for ${id} in ${colName}`);
-                  continue;
-                }
-                freshRecords.push(cursor);
-              }
+            // Compare hash + ULID against the filter to skip no-op pushes.
+            const cursorHash = (cursor as unknown as { hash?: string }).hash;
+            if (filterRec.hash === cursorHash && filterRec.lastAuditEntryId === cursor.lastAuditEntryId) {
+              this.#logger.debug(`[SD] filter: skip — CR already up to date for ${id} in ${colName}`);
+              continue;
             }
+            // Staleness: if the cursor is OLDER than what we've already delivered to
+            // the CR, drop it. This prevents a stale push (e.g. a query snapshot that
+            // read the record before a more-recent change-stream fan-out landed) from
+            // looping forever — the CR would skip it as stale and never ack, so the
+            // SD would keep retrying the same cursor.
+            if (cursor.lastAuditEntryId < filterRec.lastAuditEntryId) {
+              this.#logger.debug(`[SD] filter: drop stale cursor for ${id} in ${colName} — cursor=${cursor.lastAuditEntryId} < filter=${filterRec.lastAuditEntryId}`);
+              continue;
+            }
+            freshRecords.push(cursor);
           }
+          colFlags.set(id, addToFilter);
         }
       }
 
@@ -189,17 +310,19 @@ export class ServerDispatcher {
         for (const cursor of freshRecords) {
           const id = getCursorId(cursor);
           const kind = isDeletedCursor(cursor) ? 'delete' : 'active';
-          const inDeletedSet = deletedSet?.has(id) ?? false;
           const filterHasIt = (filterItem?.records.some(r => r.id === id)) ?? false;
-          this.#logger.debug(`[SD] dispatch ${kind} ${id} in ${colName} filterHas=${filterHasIt} deletedSet=${inDeletedSet}`);
+          const flag = colFlags.get(id);
+          this.#logger.debug(`[SD] dispatch ${kind} ${id} in ${colName} filterHas=${filterHasIt} addToFilter=${flag}`);
         }
         freshRequest.push({ collectionName: colName, records: freshRecords });
+        flagsByCol.set(colName, colFlags);
       }
     }
 
     // Step 3: If empty, return without dispatching
     if (freshRequest.length === 0) {
       this.#logger.debug('[SD] dispatch: fresh request empty, skipping');
+      this.#queue.splice(0, queueLength);
       return;
     }
 
@@ -219,18 +342,18 @@ export class ServerDispatcher {
         const colName = col.collectionName;
         const successIds = response.find(r => r.collectionName === colName)?.successfulRecordIds ?? [];
         const successSet = new Set(successIds);
+        const colFlags = flagsByCol.get(colName) ?? new Map<string, boolean>();
         let filterItem = this.#filter.find(f => f.collectionName === colName);
 
         for (const cursor of col.records) {
           const id = getCursorId(cursor);
+          const addToFilter = colFlags.get(id) ?? true;
 
           if (isDeletedCursor(cursor)) {
             if (successSet.has(id)) {
-              // Delete-is-final: permanently block future active cursors for this id on
-              // this SD, regardless of whether the record was previously in the filter.
-              // Records the client acquired via bootstrap, initial seed, or a concurrent
-              // route are all covered by deletedRecordIds so that stale actives arriving
-              // after the delete can be filtered here instead of reaching the CR.
+              // Delete-is-final: permanently block future cursors for this id, regardless
+              // of whether the record was previously in the filter or how the delete was
+              // originated (authoritative or change-stream).
               if (filterItem != null) {
                 const idx = filterItem.records.findIndex(r => r.id === id);
                 if (idx >= 0) filterItem.records.splice(idx, 1);
@@ -241,7 +364,7 @@ export class ServerDispatcher {
               this.#deletedRecordIds.get(colName)!.add(id);
               this.#logger.debug(`[SD] successfully deleted ${id} in ${colName}`);
             } else {
-              // Unsuccessfully deleted: mark as pending deletion (remove hash, keep lastAuditEntryId)
+              // Unsuccessfully deleted: mark as pending deletion (remove hash, keep ULID).
               if (filterItem == null) {
                 filterItem = { collectionName: colName, records: [] };
                 this.#filter.push(filterItem);
@@ -253,28 +376,32 @@ export class ServerDispatcher {
               } else {
                 filterItem.records.push({ id, lastAuditEntryId: cursor.lastAuditEntryId });
               }
-              this.#logger.debug(`[SD] unsuccessfully deleted ${id} in ${colName} — marked as pending deletion`);
+              this.#logger.debug(`[SD] unsuccessfully deleted ${id} in ${colName} — marked pending`);
             }
           } else if (isActiveCursor(cursor)) {
-            if (successSet.has(id)) {
-              // Successfully updated: update filter
+            if (!successSet.has(id)) continue;
+
+            const cursorHash = (cursor as unknown as { hash?: string }).hash;
+            const filterRec = filterItem?.records.find(r => r.id === id);
+
+            if (filterRec != null) {
+              // Always keep the existing filter entry in lockstep with what the CR just acked.
+              filterRec.hash = cursorHash;
+              filterRec.lastAuditEntryId = cursor.lastAuditEntryId;
+            } else if (addToFilter) {
+              // Authoritative push — add a new filter entry.
               if (filterItem == null) {
                 filterItem = { collectionName: colName, records: [] };
                 this.#filter.push(filterItem);
               }
-              const filterRec = filterItem.records.find(r => r.id === id);
-              const cursorWithHash = cursor as MXDBRecordCursors[0]['records'][0] & { hash?: string };
-              if (filterRec != null) {
-                filterRec.hash = (cursorWithHash as any).hash;
-                filterRec.lastAuditEntryId = cursor.lastAuditEntryId;
-              } else {
-                filterItem.records.push({
-                  id,
-                  hash: (cursorWithHash as any).hash,
-                  lastAuditEntryId: cursor.lastAuditEntryId,
-                });
-              }
+              filterItem.records.push({
+                id,
+                hash: cursorHash,
+                lastAuditEntryId: cursor.lastAuditEntryId,
+              });
             }
+            // else: change-stream update for a record we dropped earlier — should not reach here
+            // because we skipped it in the filter step, but guard anyway.
           }
         }
       }
@@ -282,19 +409,29 @@ export class ServerDispatcher {
       // Step 6: Trim #queue and push back failed records
       this.#queue.splice(0, queueLength);
 
-      // Push back failed cursors for retry — each collection is wrapped in an array (MXDBRecordCursors)
-      const failedBatch: MXDBRecordCursors = [];
+      // Re-queue failed cursors preserving their original addToFilter flag.
       for (const col of freshRequest) {
         const colName = col.collectionName;
         const successIds = response.find(r => r.collectionName === colName)?.successfulRecordIds ?? [];
         const successSet = new Set(successIds);
-        const failedRecords = col.records.filter(c => !successSet.has(getCursorId(c)));
-        if (failedRecords.length > 0) {
-          failedBatch.push({ collectionName: colName, records: failedRecords });
+        const colFlags = flagsByCol.get(colName) ?? new Map<string, boolean>();
+        const failed = col.records.filter(c => !successSet.has(getCursorId(c)));
+        if (failed.length === 0) continue;
+
+        // Group failures by their addToFilter flag so each re-queued batch carries a
+        // consistent flag value.
+        const groups = new Map<boolean, (MXDBActiveRecordCursor | MXDBDeletedRecordCursor)[]>();
+        for (const cursor of failed) {
+          const flag = colFlags.get(getCursorId(cursor)) ?? true;
+          if (!groups.has(flag)) groups.set(flag, []);
+          groups.get(flag)!.push(cursor);
         }
-      }
-      if (failedBatch.length > 0) {
-        this.#queue.unshift(failedBatch);
+        for (const [flag, cursors] of groups) {
+          this.#queue.unshift({
+            cursors: [{ collectionName: colName, records: cursors }],
+            addToFilter: flag,
+          });
+        }
       }
 
     } catch (err) {
@@ -302,7 +439,7 @@ export class ServerDispatcher {
         syncPaused = true;
         this.#logger.debug('[SD] SyncPausedError received — scheduling retry');
       } else {
-        this.#logger.error('[SD] dispatch error', err);
+        this.#logger.error('[SD] dispatch error', { error: err });
         this.#inFlight = false;
         throw err;
       }

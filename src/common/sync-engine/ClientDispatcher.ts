@@ -94,6 +94,22 @@ export class ClientDispatcher {
 
       if (this.#epoch !== startEpoch) return;
 
+      // Seed the queue from the states being dispatched. Without this step, an
+      // enqueue() that fires while the initial dispatch is in flight would see
+      // an empty queue (exists=false), push a fresh entry, and then be silently
+      // removed by #processSuccessResponse's success-id filter — losing the edit.
+      // #timerTick already does this implicitly via its filter at line 180; the
+      // initial onStart path needs the equivalent so that concurrent enqueues
+      // route through the #pendingReEnqueue mechanism.
+      for (const col of states) {
+        for (const s of col.records) {
+          const recordId = getStateId(s);
+          if (!this.#queue.some(q => q.collectionName === col.collectionName && q.recordId === recordId)) {
+            this.#queue.push({ collectionName: col.collectionName, recordId });
+          }
+        }
+      }
+
       // Mark in-flight before awaiting #buildRequest (see #timerTick for rationale).
       const dispatchEpoch = this.#epoch;
       this.#inFlight = true;
@@ -120,7 +136,7 @@ export class ClientDispatcher {
 
       } catch (err) {
         if (this.#epoch !== startEpoch) return;
-        this.#logger.warn('[CD] onStart dispatch failed, retrying', err);
+        this.#logger.warn('[CD] onStart dispatch failed, retrying', { error: err });
         // Fall through to retry delay
       } finally {
         this.#inFlight = false;
@@ -202,7 +218,10 @@ export class ClientDispatcher {
       success = true;
 
     } catch (err) {
-      this.#logger.warn('[CD] timer dispatch failed', err);
+      const msg = (err as any)?.message ?? String(err);
+      const stack = (err as any)?.stack;
+      const name = (err as any)?.name;
+      this.#logger.warn(`[CD] timer dispatch failed: ${name ?? 'Error'}: ${msg}`, { error: msg, stack });
     } finally {
       this.#inFlight = false;
       this.#props.onDispatching(false);

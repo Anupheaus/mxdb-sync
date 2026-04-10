@@ -4,7 +4,6 @@ import {
   ServerDispatcher,
   SyncPausedError,
   type MXDBRecordCursors,
-  type MXDBSyncEngineResponse,
   type ServerDispatcherFilter,
 } from '.';
 
@@ -276,6 +275,33 @@ describe('ServerDispatcher', () => {
       expect((arg[0].records[0] as any).recordId).toBe('unknown-r');
     });
 
+    it('change-stream delete (addToFilter=false) for unknown record still records tombstone', async () => {
+      // Regression: previously, when the change-stream delete fan-out arrived for a
+      // record that wasn't in the SD's per-connection filter, the SD dropped the
+      // delete cursor AND did not record the tombstone. Any pre-delete active cursor
+      // for the same id that was already queued (e.g. queued before the delete from
+      // a parallel `pushActive` path) would then dispatch later and resurrect the
+      // record on the CR. Stress test repro: a client reconnected after a server
+      // restart, several pre-delete active cursors were queued, the change-stream
+      // delete fanned out, was dropped here, then the queued active cursor landed
+      // and re-created the record on the client.
+      const onDispatch = vi.fn().mockResolvedValue([]);
+      const sd = new ServerDispatcher(mockLogger, { onDispatch });
+
+      // Step 1: change-stream delete for an unknown record — should be dropped
+      // (nothing dispatched) but the id must still go into #deletedRecordIds.
+      sd.push([{ collectionName: 'items', records: [makeDeletedCursor('r1', 'u2')] }], false);
+      await vi.runAllTimersAsync();
+      expect(onDispatch).not.toHaveBeenCalled();
+
+      // Step 2: a stale pre-delete active cursor (authoritative push) for the same
+      // id arrives. With the regression in place, this would dispatch and resurrect
+      // the record on the CR. With the fix, #deletedRecordIds blocks it.
+      sd.push([{ collectionName: 'items', records: [makeActiveCursor('r1', 'stale-hash', 'u1')] }], true);
+      await vi.runAllTimersAsync();
+      expect(onDispatch).not.toHaveBeenCalled();
+    });
+
     it('blocks active cursors when id is in deletedRecordIds and filterItem is null', async () => {
       // The "filterItem == null" branch for active cursors must still consult
       // deletedRecordIds — otherwise a stale active could slip through if the
@@ -291,6 +317,59 @@ describe('ServerDispatcher', () => {
       }]);
 
       sd.push([{ collectionName: 'items', records: [makeActiveCursor('r1', 'hash1', 'u1')] }]);
+      await vi.runAllTimersAsync();
+      expect(onDispatch).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('updateFilter clears premature tombstones', () => {
+    it('clears tombstone when client reports active record via updateFilter', async () => {
+      // Reproduces the post-restart race:
+      // 1. Change-stream delete arrives for unknown record → tombstone recorded
+      // 2. Client's CD.start() triggers SR → SR calls updateFilter with the record as active
+      // 3. SR detects server deleted → pushes authoritative delete cursor
+      // Without the fix, the tombstone from step 1 blocks the delete in step 3.
+      const onDispatch = vi.fn().mockResolvedValue([{ collectionName: 'items', successfulRecordIds: ['r1'] }]);
+      const sd = new ServerDispatcher(mockLogger, { onDispatch });
+
+      // Step 1: change-stream delete for unknown record → tombstone
+      sd.push([{ collectionName: 'items', records: [makeDeletedCursor('r1', 'u2')] }], false);
+      await vi.runAllTimersAsync();
+      expect(onDispatch).not.toHaveBeenCalled();
+
+      // Step 2: SR seeds filter — client says it has r1 as active
+      sd.updateFilter([{
+        collectionName: 'items',
+        records: [{ id: 'r1', hash: 'hash1', lastAuditEntryId: 'u1' }],
+      }]);
+
+      // Step 3: SR pushes authoritative delete (server has deleted r1)
+      sd.push([{ collectionName: 'items', records: [makeDeletedCursor('r1', 'u3')] }], true);
+      await vi.runAllTimersAsync();
+
+      // The delete cursor MUST reach the client — tombstone was cleared by updateFilter
+      expect(onDispatch).toHaveBeenCalledOnce();
+      const arg = onDispatch.mock.calls[0][0] as MXDBRecordCursors;
+      expect(arg[0].records).toHaveLength(1);
+      expect((arg[0].records[0] as any).recordId).toBe('r1');
+    });
+
+    it('does NOT clear tombstone when client reports deleted record via updateFilter', async () => {
+      const onDispatch = vi.fn().mockResolvedValue([]);
+      const sd = new ServerDispatcher(mockLogger, { onDispatch });
+
+      // Tombstone via change-stream
+      sd.push([{ collectionName: 'items', records: [makeDeletedCursor('r1', 'u2')] }], false);
+      await vi.runAllTimersAsync();
+
+      // Client reports r1 as deleted (hash == null) — tombstone should NOT be cleared
+      sd.updateFilter([{
+        collectionName: 'items',
+        records: [{ id: 'r1', lastAuditEntryId: 'u1' }], // no hash = deleted
+      }]);
+
+      // A stale active cursor should still be blocked
+      sd.push([{ collectionName: 'items', records: [makeActiveCursor('r1', 'new-hash', 'u3')] }]);
       await vi.runAllTimersAsync();
       expect(onDispatch).not.toHaveBeenCalled();
     });

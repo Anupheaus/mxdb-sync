@@ -1,5 +1,5 @@
 import type { MongoDocOf, MXDBCollection } from '../../../common';
-import type { ChangeStream, ChangeStreamDocument, Db } from 'mongodb';
+import type { ChangeStream, ChangeStreamDocument, ClientSession, Db } from 'mongodb';
 import { MongoClient } from 'mongodb';
 import { getCollectionExtensions } from '../../collections/extendCollection';
 import { ServerDbCollection } from './ServerDbCollection';
@@ -43,6 +43,69 @@ export class ServerDb {
   #connectBackoffMsPrev = 500;
   #connectBackoffMsCurr = 500;
   #connectAttempt = 0;
+  #isClosing = false;
+  #activeSessions = new Set<ClientSession>();
+
+  /**
+   * Track an active ClientSession so it can be force-aborted on graceful shutdown.
+   * Critical for preventing the next-restarted server from inheriting Mongo document
+   * locks held by transactions that were in-flight when the old server died.
+   * Returns an unregister callback to be called in a `finally`.
+   */
+  public registerSession(session: ClientSession): () => void {
+    this.#activeSessions.add(session);
+    return () => { this.#activeSessions.delete(session); };
+  }
+
+  /** True once `close()` has been entered. Used by callers (e.g. action handlers) to
+   *  short-circuit work that would otherwise spin up new Mongo sessions during shutdown. */
+  public get isClosing(): boolean { return this.#isClosing; }
+
+  /**
+   * Instant shutdown. No drain.
+   *
+   * Rationale: any in-flight write that hasn't been acknowledged to the client is still
+   * sitting in that client's C2S queue — it will be resent on reconnect, so aborting it
+   * mid-flight is not data loss. Draining to "let writes commit" was costing 4–6 s per
+   * restart and the new sessions kept arriving during the drain anyway (clients still
+   * firing sync requests at a server that's about to die), so the drain rarely emptied
+   * `#activeSessions` and almost always force-aborted at the deadline.
+   *
+   * The new flow:
+   *  1. Flip `#isClosing` so the action handler refuses new sync requests up-front (those
+   *     would otherwise call `db.client.startSession()` mid-shutdown).
+   *  2. Close the change stream (it holds an open cursor on the Mongo client).
+   *  3. Force-abort every active session in parallel — no awaiting individual abort futures,
+   *     no drain. Each `endSession()` is fire-and-forget; failures are ignored because the
+   *     session may already be torn down by the client close that follows.
+   *  4. `MongoClient.close(true)` to terminate the TCP pool. Force=true so it does not
+   *     wait on operations.
+   */
+  public async close(): Promise<void> {
+    if (this.#isClosing) return;
+    this.#isClosing = true;
+    const sessionCount = this.#activeSessions.size;
+    this.#logger.info(`[ServerDb] close.begin activeSessions=${sessionCount}`);
+    // Snapshot + clear sessions before aborting so any concurrent unregister() is a no-op.
+    const sessions = [...this.#activeSessions];
+    this.#activeSessions.clear();
+    // Fire-and-forget abort + endSession for every session. We do NOT await — these calls
+    // can hang on the network when the Mongo client is mid-teardown, and we are about to
+    // force-close the client anyway, which will reject any outstanding session ops.
+    for (const session of sessions) {
+      try { if (session.inTransaction()) void session.abortTransaction().catch(() => { /* already aborting */ }); }
+      catch { /* session may already be ending */ }
+      try { void session.endSession().catch(() => { /* already ended */ }); }
+      catch { /* already ended */ }
+    }
+    // Close the change stream BEFORE the client — it owns a long-lived cursor that would
+    // otherwise hold the client open and inflate `client.close()` latency.
+    try { await this.#changeStream?.close(); } catch { /* already closing */ }
+    try { await this.#client.close(true); } catch (error) {
+      this.#logger.warn('[ServerDb] close — MongoClient.close threw', { error: String((error as any)?.message ?? error) });
+    }
+    this.#logger.info(`[ServerDb] close.done abortedSessions=${sessionCount}`);
+  }
 
   public use<RecordType extends Record>(collectionName: string) {
     return this.#collections.get(collectionName) as ServerDbCollection<RecordType>;
@@ -86,13 +149,17 @@ export class ServerDb {
     const attemptToConnect = async (): Promise<Db> => {
       this.#connectAttempt += 1;
       const attempt = this.#connectAttempt;
-      this.#logger.info(`Connecting to database "${this.#mongoDbName}" (attempt ${attempt})...`);
+      const startedAt = Date.now();
+      this.#logger.info(`[ServerDb] connect.begin (attempt ${attempt}) "${this.#mongoDbName}"`);
       try {
         await this.#client.connect();
+        const connectMs = Date.now() - startedAt;
+        this.#logger.info(`[ServerDb] connect.mongoClient.connected (attempt ${attempt}, ${connectMs}ms)`);
         const db = this.#client.db(this.#mongoDbName);
         this.#resetConnectBackoff();
-        this.#logger.info(`Connected to database "${this.#mongoDbName}" after ${attempt} attempt(s).`);
+        this.#logger.info(`[ServerDb] connect.db.handle ready — starting changeStream watcher`);
         this.#startWatching(db);
+        this.#logger.info(`[ServerDb] connect.done (total ${Date.now() - startedAt}ms)`);
         return db;
       } catch (error) {
         const delayMs = this.#nextConnectDelayMs();
@@ -132,6 +199,7 @@ export class ServerDb {
     });
 
     client.on('connectionClosed', event => {
+      if (this.#isClosing) return;
       logger.debug('Database connection closed unexpectedly', { event });
       this.#connect();
     });
@@ -152,7 +220,7 @@ export class ServerDb {
         return new Set(collectionNames);
       })();
     };
-    return new Map(collections.map(collection => [collection.name, new ServerDbCollection({ getDb: () => this.#db, collectionNames: getCollectionNames(), collection, logger: this.#logger })]));
+    return new Map(collections.map(collection => [collection.name, new ServerDbCollection({ getDb: () => this.#db, collectionNames: getCollectionNames(), collection, logger: this.#logger, registerSession: (session: ClientSession) => this.registerSession(session) })]));
   }
 
   async #runExtensionHooksAfterChange(event: ServerDbChangeEvent) {
@@ -188,7 +256,15 @@ export class ServerDb {
   }
 
   #startWatching(db: Db) {
+    this.#logger.info('[ServerDb] startWatching.begin');
     const changeStream = this.#changeStream = db.watch([{ $project: { something: false } }], { fullDocumentBeforeChange: 'whenAvailable' });
+    changeStream.on('error', err => {
+      this.#logger.error('[ServerDb] changeStream error', { error: String((err as any)?.message ?? err) });
+    });
+    changeStream.on('close', () => {
+      this.#logger.info('[ServerDb] changeStream closed');
+    });
+    this.#logger.info('[ServerDb] startWatching.ready (listeners attached)');
     changeStream.on('change', change => {
       const collectionName: string | undefined = 'ns' in change && change.ns != null && 'coll' in change.ns ? change.ns.coll : undefined;
       const op = 'operationType' in change ? change.operationType : undefined;

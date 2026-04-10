@@ -6,7 +6,6 @@ import {
   ServerReceiver,
   ServerDispatcher,
   type MXDBRecordStates,
-  type MXDBSyncEngineResponse,
   type ClientDispatcherRequest,
 } from '.';
 

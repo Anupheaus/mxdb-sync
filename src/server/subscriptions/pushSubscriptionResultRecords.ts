@@ -3,8 +3,14 @@ import type { MXDBCollection } from '../../common';
 import type { ServerToClientSynchronisation } from '../ServerToClientSynchronisation';
 
 /**
- * After a subscription snapshot, seed the S2C filter for the query result
- * records and push any stale deletions to the client.
+ * Deliver a subscription snapshot (query / getAll / get result) to the connected
+ * client via the S2C dispatcher. Records are pushed authoritatively
+ * (`addToFilter=true`), so the SD adds them to its filter on successful CR ack —
+ * subsequent change-stream events for the same ids can then reach the client.
+ *
+ * Deletions (records that used to be in the query but no longer are, or ids that
+ * the CR has but the server doesn't) are pushed as change-stream-style deletes so
+ * that the CR removes them.
  *
  * The caller MUST pass the {@link ServerToClientSynchronisation} instance captured
  * at subscription setup time, because `onChange` callbacks fire from the MongoDB
@@ -19,7 +25,7 @@ export async function pushSubscriptionResultRecords<RecordType extends Record>(
 ): Promise<void> {
   if (records.length === 0 && removedIds.length === 0) return;
   if (records.length > 0) {
-    await s2c.seedActive(collection.name, records);
+    await s2c.pushActive(collection.name, records);
   }
   if (removedIds.length > 0) {
     await s2c.pushDeletes(collection.name, removedIds);

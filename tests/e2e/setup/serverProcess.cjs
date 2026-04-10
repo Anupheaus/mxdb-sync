@@ -57,15 +57,27 @@ Logger.registerListener({
 
 const logger = new Logger('mxdb-e2e-server');
 
+const bootStartMs = Date.now();
+function bootLog(phase, detail) {
+  const elapsedMs = Date.now() - bootStartMs;
+  logger.info(`[boot] ${phase} (+${elapsedMs}ms)`, detail ?? {});
+}
+
+bootLog('process.entry', { pid: process.pid, port: PORT, mongoDbName: MONGO_DB_NAME });
+
 async function main() {
+  bootLog('main.begin');
   const keyPath = path.join(__dirname, 'certs', 'localhost.key');
   const certPath = path.join(__dirname, 'certs', 'localhost.crt');
+  bootLog('tls.readFiles.begin', { keyPath, certPath });
   const server = https.createServer({
     key: fs.readFileSync(keyPath),
     cert: fs.readFileSync(certPath),
   });
+  bootLog('tls.readFiles.done');
 
-  await startServer({
+  bootLog('startServer.call');
+  const serverInstance = await startServer({
     name: E2E_SOCKET_API_NAME,
     logger,
     collections: [e2eTestCollection],
@@ -73,25 +85,70 @@ async function main() {
     mongoDbName: MONGO_DB_NAME,
     mongoDbUrl: MONGO_URI,
   });
+  bootLog('startServer.returned');
 
+  bootLog('server.listen.begin', { port: PORT });
   await new Promise((resolve, reject) => {
     server.listen(PORT, () => resolve());
     server.once('error', reject);
   });
+  bootLog('server.listen.done');
 
   const addr = server.address();
   const actualPort = addr && typeof addr === 'object' ? addr.port : PORT;
+  bootLog('ready.sending', { actualPort });
   if (process.send) process.send({ type: 'ready', port: actualPort });
+  bootLog('ready.sent');
 
-  const shutdown = () => {
-    server.close(() => process.exit(0));
+  let shuttingDown = false;
+  const shutdown = async () => {
+    if (shuttingDown) return;
+    shuttingDown = true;
+    bootLog('shutdown.signal');
+    // Force-close socket-io/HTTP sockets so server.close() doesn't hang on long-lived connections.
+    try {
+      const io = server.sockets || null;
+      if (io && typeof io.close === 'function') io.close();
+    } catch { /* ignore */ }
+    const httpClosed = new Promise(resolve => server.close(() => resolve()));
+    // Cleanly close the MongoClient FIRST so in-flight transactions abort on the Mongo side.
+    // Without this, Mongo leaves row locks held until transactionLifetimeLimitSeconds (60s),
+    // causing the next-restarted server to stall for ~60s on every affected document.
+    try {
+      bootLog('shutdown.db.close.begin');
+      await serverInstance.close();
+      bootLog('shutdown.db.close.done');
+    } catch (err) {
+      bootLog('shutdown.db.close.error', { error: String((err && err.message) || err) });
+    }
+    // Give HTTP a brief grace period, then exit.
+    await Promise.race([httpClosed, new Promise(r => setTimeout(r, 2000))]);
+    bootLog('shutdown.closed');
+    process.exit(0);
   };
   process.on('SIGTERM', shutdown);
   process.on('SIGINT', shutdown);
+  // IPC-based shutdown — Windows cannot invoke signal handlers via proc.kill('SIGTERM'),
+  // so the test harness sends a { type: 'shutdown' } IPC message which we handle here.
+  process.on('message', msg => {
+    if (msg && msg.type === 'shutdown') shutdown();
+  });
 }
 
 main().catch(err => {
   // eslint-disable-next-line no-console
   console.error(err);
+  bootLog('main.fatal', { error: String((err && err.message) || err), stack: err && err.stack });
   process.exit(1);
+});
+
+process.on('uncaughtException', err => {
+  bootLog('uncaughtException', { error: String((err && err.message) || err), stack: err && err.stack });
+  // eslint-disable-next-line no-console
+  console.error('[uncaughtException]', err);
+});
+process.on('unhandledRejection', err => {
+  bootLog('unhandledRejection', { error: String((err && err.message) || err), stack: err && err.stack });
+  // eslint-disable-next-line no-console
+  console.error('[unhandledRejection]', err);
 });

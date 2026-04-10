@@ -29,4 +29,6 @@ export interface ServerInstance {
   getDevices(userId: string): Promise<MXDBDeviceInfo[]>;
   enableDevice(requestId: string): Promise<void>;
   disableDevice(requestId: string): Promise<void>;
+  /** Cleanly close the MongoClient — call from SIGTERM/SIGINT handlers to release in-flight transaction locks. */
+  close(): Promise<void>;
 }

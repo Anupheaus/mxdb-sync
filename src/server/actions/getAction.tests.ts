@@ -17,12 +17,12 @@ describe('handleGet', () => {
   const collection = { name: 'items' };
   const mockGet = vi.fn();
   const mockDbCollection = { collection, get: mockGet };
-  const mockSeedActive = vi.fn();
+  const mockPushActive = vi.fn();
 
   beforeEach(() => {
     vi.clearAllMocks();
     mockUseDb.mockReturnValue({ use: () => mockDbCollection });
-    mockUseServerToClientSynchronisation.mockReturnValue({ seedActive: mockSeedActive });
+    mockUseServerToClientSynchronisation.mockReturnValue({ pushActive: mockPushActive });
   });
 
   it('returns empty array when get returns null or empty', async () => {
@@ -32,17 +32,17 @@ describe('handleGet', () => {
     expect(await handleGet({ collectionName: 'items', ids: ['1'] })).toEqual([]);
   });
 
-  it('calls seedActive and returns ids', async () => {
+  it('calls pushActive and returns ids', async () => {
     const records = withIds([{ id: '1', name: 'a' }, { id: '2', name: 'b' }]);
     mockGet.mockResolvedValue(records);
     const result = await handleGet({ collectionName: 'items', ids: ['1', '2'] });
-    expect(mockSeedActive).toHaveBeenCalledWith('items', records);
+    expect(mockPushActive).toHaveBeenCalledWith('items', records);
     expect(result).toEqual(['1', '2']);
   });
 
-  it('does not call seedActive when no records returned', async () => {
+  it('does not call pushActive when no records returned', async () => {
     mockGet.mockResolvedValue([]);
     await handleGet({ collectionName: 'items', ids: [] });
-    expect(mockSeedActive).not.toHaveBeenCalled();
+    expect(mockPushActive).not.toHaveBeenCalled();
   });
 });

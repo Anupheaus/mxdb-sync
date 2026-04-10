@@ -81,7 +81,18 @@ export async function waitForAllClientsIdle(
     }
     await new Promise<void>(r => setTimeout(r, pollMs));
   }
-  throw new Error('waitForAllClientsIdle: timeout');
+  // Build a per-client snapshot so we can see who is stuck and why
+  const details = clients.map((c, i) => {
+    const connected = c.getIsConnected?.() ?? true;
+    const syncing = c.getIsSynchronising();
+    const pending = c.getPendingC2SSyncQueueSize();
+    return `#${i}{conn=${connected},sync=${syncing},pending=${pending}}`;
+  });
+  const stuck = clients
+    .map((c, i) => ({ i, syncing: c.getIsSynchronising(), pending: c.getPendingC2SSyncQueueSize() }))
+    .filter(s => s.syncing || s.pending > 0)
+    .map(s => `#${s.i}[sync=${s.syncing},pending=${s.pending}]`);
+  throw new Error(`waitForAllClientsIdle: timeout after ${timeoutMs}ms — stuck: ${stuck.join(', ')} | all: ${details.join(' ')}`);
 }
 
 /**

@@ -165,15 +165,6 @@ export async function runStressRandomMixWorkload(deps: StressRandomMixWorkloadDe
     distinctHarnessIds: harnessRecordIds.size,
   });
 
-  runLogger.log('sync_request', { phase: 'quiet_period', stableMs: QUIET_PERIOD_STABLE_MS, timeoutMs: QUIET_PERIOD_TIMEOUT_MS });
-  await waitForAllClientsIdle(clients, {
-    timeoutMs: QUIET_PERIOD_TIMEOUT_MS,
-    stableTicksRequired: Math.ceil(QUIET_PERIOD_STABLE_MS / 200),
-    pollMs: 200,
-    requireConnected: true,
-  });
-  runLogger.log('sync_response', { phase: 'quiet_period', status: 'idle' });
-
   const settleDeadline = Date.now() + QUIET_PERIOD_TIMEOUT_MS;
   runLogger.log('sync_request', { phase: 'phase_marker', marker: 'mongo_settle_begin' });
   let lastMissing = Number.POSITIVE_INFINITY;
@@ -213,6 +204,15 @@ export async function runStressRandomMixWorkload(deps: StressRandomMixWorkloadDe
   await new Promise(r => setTimeout(r, FINAL_SYNC_GRACE_MS));
   runLogger.log('sync_response', { phase: 'phase_marker', marker: 'final_grace_end' });
   await logPostSettleDiagnostics('after_final_grace_before_final_report', clients, runLogger);
+
+  runLogger.log('sync_request', { phase: 'quiet_period', stableMs: QUIET_PERIOD_STABLE_MS, timeoutMs: QUIET_PERIOD_TIMEOUT_MS });
+  await waitForAllClientsIdle(clients, {
+    timeoutMs: QUIET_PERIOD_TIMEOUT_MS,
+    stableTicksRequired: Math.ceil(QUIET_PERIOD_STABLE_MS / 200),
+    pollMs: 200,
+    requireConnected: true,
+  });
+  runLogger.log('sync_response', { phase: 'quiet_period', status: 'idle' });
 
   expectedState = await expectedStateFromClients(clients);
   const serverRecords = await server.readLiveRecords();

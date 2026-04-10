@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import '@anupheaus/common'; // ensure Object.clone and other extensions are installed
 import type { Logger } from '@anupheaus/common';
-import { auditor, AuditEntryType } from '../auditor';
+import { auditor } from '../auditor';
 import {
   ClientReceiver,
   SyncPausedError,

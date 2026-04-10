@@ -44,7 +44,7 @@ export class ClientToServerSynchronisation {
 
     this.#cd = new ClientDispatcher(props.logger, {
       clientReceiver: props.clientReceiver,
-      onStart: () => this.#collectAllPendingStates(),
+      onStart: () => this.#collectAllStatesForOnStart(),
       // CD declares onPayloadRequest with a method-level generic <T>; our
       // concrete MXDBRecordStates return value is cast because the caller
       // cannot satisfy the generic from inside a callback literal.
@@ -59,6 +59,19 @@ export class ClientToServerSynchronisation {
   // ── Public API ──────────────────────────────────────────────────────────
 
   get isDispatching(): boolean { return this.#isDispatching; }
+
+  /**
+   * Number of records with pending state across all configured collections.
+   * Used by e2e stability checks — 0 means nothing waiting to be dispatched.
+   */
+  get pendingQueueEntryCount(): number {
+    const db = this.#getDb();
+    let total = 0;
+    for (const collection of this.#collections) {
+      total += db.use(collection.name).getPendingStatesSync().length;
+    }
+    return total;
+  }
 
   onDispatchingChanged(listener: (value: boolean) => void): () => void {
     this.#dispatchingListeners.add(listener);
@@ -99,11 +112,19 @@ export class ClientToServerSynchronisation {
 
   // ── CD callback implementations ─────────────────────────────────────────
 
-  #collectAllPendingStates(): MXDBRecordStates {
+  /**
+   * Feed the CD's onStart sweep with EVERY locally known record (pending or
+   * branch-only), not just records with uncollapsed audit entries. The SR
+   * mirrors this into the SD's filter and then walks every id against current
+   * server state — that is the only place server-side deletions that happened
+   * while we were disconnected get pushed back as disparity delete cursors. See
+   * ServerReceiver branchOnly path for the merge semantics.
+   */
+  #collectAllStatesForOnStart(): MXDBRecordStates {
     const db = this.#getDb();
     const out: MXDBRecordStates = [];
     for (const collection of this.#collections) {
-      const records = db.use(collection.name).getPendingStatesSync();
+      const records = db.use(collection.name).getAllStatesSync();
       if (records.length > 0) out.push({ collectionName: collection.name, records });
     }
     return out;

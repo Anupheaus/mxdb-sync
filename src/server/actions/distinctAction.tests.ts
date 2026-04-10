@@ -22,12 +22,12 @@ describe('handleDistinct', () => {
   const collection = { name: 'items' };
   const mockDistinct = vi.fn();
   const mockDbCollection = { collection, distinct: mockDistinct };
-  const mockSeedActive = vi.fn();
+  const mockPushActive = vi.fn();
 
   beforeEach(() => {
     vi.clearAllMocks();
     mockUseDb.mockReturnValue({ use: () => mockDbCollection });
-    mockUseServerToClientSynchronisation.mockReturnValue({ seedActive: mockSeedActive });
+    mockUseServerToClientSynchronisation.mockReturnValue({ pushActive: mockPushActive });
   });
 
   it('returns empty array when distinct returns null or empty', async () => {
@@ -37,18 +37,18 @@ describe('handleDistinct', () => {
     expect(await handleDistinct(dr({ collectionName: 'items', field: 'name' }))).toEqual([]);
   });
 
-  it('calls seedActive and returns a hash string', async () => {
+  it('calls pushActive and returns a hash string', async () => {
     const records = withIds([{ id: '1' }, { id: '2' }]);
     mockDistinct.mockResolvedValue(records);
     const result = await handleDistinct(dr({ collectionName: 'items', field: 'name' }));
-    expect(mockSeedActive).toHaveBeenCalledWith('items', records);
+    expect(mockPushActive).toHaveBeenCalledWith('items', records);
     expect(typeof result).toBe('string');
     expect((result as string).length).toBeGreaterThan(0);
   });
 
-  it('does not call seedActive when distinct returns empty', async () => {
+  it('does not call pushActive when distinct returns empty', async () => {
     mockDistinct.mockResolvedValue([]);
     await handleDistinct(dr({ collectionName: 'items', field: 'name' }));
-    expect(mockSeedActive).not.toHaveBeenCalled();
+    expect(mockPushActive).not.toHaveBeenCalled();
   });
 });

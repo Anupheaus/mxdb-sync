@@ -14,7 +14,8 @@ const slowFilterParseThreshold = 1000;
 const slowQueryThreshold = 3000;
 
 // §6.9#14 — Transient failure retry config (per-record)
-const SYNC_RETRY_DELAY_MS = 5_000;
+const SYNC_RETRY_BASE_DELAY_MS = 100;
+const SYNC_RETRY_MAX_DELAY_MS = 2_000;
 const SYNC_MAX_RETRIES = 20;
 
 export interface SyncWriteResult {
@@ -44,19 +45,23 @@ interface Props<RecordType extends Record> {
   collection: MXDBCollection<RecordType>;
   collectionNames: Promise<Set<string>>;
   logger: Logger;
+  /** Hook to register an active ClientSession with the owning ServerDb so it can be aborted on shutdown. */
+  registerSession?(session: ClientSession): () => void;
 }
 
 export class ServerDbCollection<RecordType extends Record = Record> {
-  constructor({ getDb, collection, collectionNames, logger }: Props<RecordType>) {
+  constructor({ getDb, collection, collectionNames, logger, registerSession }: Props<RecordType>) {
     this.#getDb = getDb;
     this.#collection = collection;
     this.#collectionNames = collectionNames;
     this.#config = configRegistry.getOrError(collection);
     this.#logger = logger.createSubLogger(collection.name);
+    this.#registerSession = registerSession;
     this.#configure();
   }
 
   #getDb: () => Promise<Db>;
+  #registerSession?: (session: ClientSession) => () => void;
   #collectionNames: Promise<Set<string>>;
   #collection: MXDBCollection<RecordType>;
   #config: MXDBCollectionConfig;
@@ -212,19 +217,41 @@ export class ServerDbCollection<RecordType extends Record = Record> {
    */
   public async sync({ updated, updatedAudits, removedIds }: DbCollectionSyncProps<RecordType>): Promise<SyncWriteResult[]> {
     const db = await this.#getDb();
-    const results: SyncWriteResult[] = [];
 
-    // Per-record upserts
-    for (const record of updated) {
+    // Per-record upserts — run in parallel. Each record owns its own session and
+    // transaction; the inner try/catch MUST resolve to a SyncWriteResult rather than
+    // reject so a single bad record does not fail the entire Promise.all (§6.9#15).
+    const upsertResults = await Promise.all(updated.map(async (record): Promise<SyncWriteResult> => {
       const recordSyncT0 = performance.now();
       const audit = updatedAudits.find(a => a.id === record.id);
+      const sessT0 = performance.now();
       const session = db.client.startSession();
+      const sessStartMs = Math.round(performance.now() - sessT0);
+      const unregister = this.#registerSession?.(session);
+      let txnAttempts = 0;
+      let lastWriteRecordsMs = 0;
+      let lastWriteAuditMs = 0;
       try {
         await this.#withRecordRetry(record.id, async () => {
+          const wtT0 = performance.now();
           await session.withTransaction(async () => {
+            txnAttempts += 1;
+            const writeRecT0 = performance.now();
             await this.#writeRecords([record], session);
-            if (audit) await this.#writeAuditRecords([audit], session);
+            lastWriteRecordsMs = Math.round(performance.now() - writeRecT0);
+            if (audit) {
+              const writeAudT0 = performance.now();
+              await this.#writeAuditRecords([audit], session);
+              lastWriteAuditMs = Math.round(performance.now() - writeAudT0);
+            }
           });
+          const wtMs = Math.round(performance.now() - wtT0);
+          this.#logger.debug(`[sync-diag] upsert withTransaction "${this.#collection.name}" recId=${record.id} attempts=${txnAttempts} wtMs=${wtMs} writeRecMs=${lastWriteRecordsMs} writeAudMs=${lastWriteAuditMs}`);
+          if (wtMs >= 2_000 || txnAttempts > 1) {
+            this.#logger.warn(`[sync-diag] slow/retried upsert withTransaction "${this.#collection.name}"`, {
+              recordId: record.id, attempts: txnAttempts, wtMs, writeRecMs: lastWriteRecordsMs, writeAudMs: lastWriteAuditMs,
+            });
+          }
         });
         const recordSyncMs = Math.round(performance.now() - recordSyncT0);
         this.#logger.debug('liveCollection:sync write committed (Mongo transaction)', {
@@ -232,81 +259,165 @@ export class ServerDbCollection<RecordType extends Record = Record> {
           recordId: record.id,
           updatedAt: (record as { updatedAt?: number }).updatedAt,
           durationMs: recordSyncMs,
+          sessStartMs,
+          txnAttempts,
         });
         if (recordSyncMs >= 2_000) {
           this.#logger.warn(`liveCollection:sync slow upsert on "${this.#collection.name}"`, {
             recordId: record.id,
             durationMs: recordSyncMs,
+            sessStartMs,
+            txnAttempts,
+            lastWriteRecordsMs,
+            lastWriteAuditMs,
           });
         }
-        results.push({ id: record.id });
+        return { id: record.id };
       } catch (err) {
         this.#logger.error(`§6.9#15 Permanent write failure for "${record.id}" in "${this.#collection.name}"`, {
           recordId: record.id,
           error: err instanceof Error ? err.message : String(err),
+          stack: err instanceof Error ? err.stack : undefined,
+          txnAttempts,
         });
-        results.push({ id: record.id, error: err instanceof Error ? err.message : String(err) });
+        return { id: record.id, error: err instanceof Error ? err.message : String(err) };
       } finally {
+        unregister?.();
+        const endT0 = performance.now();
         await session.endSession();
+        const endMs = Math.round(performance.now() - endT0);
+        if (endMs >= 500) this.#logger.warn(`[sync-diag] slow session.endSession upsert recId=${record.id} ms=${endMs}`);
       }
-    }
+    }));
 
-    // Per-record deletes
+    // Per-record deletes — same parallel pattern. Sequential after upserts so that if
+    // the same id accidentally appears in both lists (shouldn't, by contract) the
+    // delete still lands last.
     const liveCollection = await this.#getCollection();
-    for (const id of removedIds) {
+    const deleteResults = await Promise.all(removedIds.map(async (id): Promise<SyncWriteResult> => {
       const deleteSyncT0 = performance.now();
       const audit = updatedAudits.find(a => a.id === id);
+      const sessT0 = performance.now();
       const session = db.client.startSession();
+      const sessStartMs = Math.round(performance.now() - sessT0);
+      const unregister = this.#registerSession?.(session);
+      let txnAttempts = 0;
+      let lastFindMs = 0;
+      let lastDelMs = 0;
+      let lastWriteAuditMs = 0;
       try {
         await this.#withRecordRetry(id, async () => {
+          const wtT0 = performance.now();
           await session.withTransaction(async () => {
+            txnAttempts += 1;
+            const findT0 = performance.now();
             const doc = await liveCollection.findOne({ _id: id as any }, { session });
+            lastFindMs = Math.round(performance.now() - findT0);
             const live = doc == null ? undefined : (dbUtils.deserialize(doc) as RecordType);
+            const delT0 = performance.now();
             await liveCollection.deleteOne({ _id: id as any }, { session });
+            lastDelMs = Math.round(performance.now() - delT0);
             if (audit) {
+              const writeAudT0 = performance.now();
               await this.#writeAuditRecords([audit], session, {
                 deleteSnapshots: live != null ? { [id]: live } : undefined,
               });
+              lastWriteAuditMs = Math.round(performance.now() - writeAudT0);
             }
           });
+          const wtMs = Math.round(performance.now() - wtT0);
+          this.#logger.debug(`[sync-diag] delete withTransaction "${this.#collection.name}" recId=${id} attempts=${txnAttempts} wtMs=${wtMs} findMs=${lastFindMs} delMs=${lastDelMs} writeAudMs=${lastWriteAuditMs}`);
+          if (wtMs >= 2_000 || txnAttempts > 1) {
+            this.#logger.warn(`[sync-diag] slow/retried delete withTransaction "${this.#collection.name}"`, {
+              recordId: id, attempts: txnAttempts, wtMs, findMs: lastFindMs, delMs: lastDelMs, writeAudMs: lastWriteAuditMs,
+            });
+          }
         });
         const deleteSyncMs = Math.round(performance.now() - deleteSyncT0);
         this.#logger.debug('liveCollection:sync delete committed (Mongo transaction)', {
           collection: this.#collection.name,
           recordId: id,
           durationMs: deleteSyncMs,
+          sessStartMs,
+          txnAttempts,
         });
         if (deleteSyncMs >= 2_000) {
           this.#logger.warn(`liveCollection:sync slow delete on "${this.#collection.name}"`, {
             recordId: id,
             durationMs: deleteSyncMs,
+            sessStartMs,
+            txnAttempts,
+            lastFindMs,
+            lastDelMs,
+            lastWriteAuditMs,
           });
         }
-        results.push({ id });
+        return { id };
       } catch (err) {
         this.#logger.error(`§6.9#15 Permanent delete failure for "${id}" in "${this.#collection.name}"`, {
           recordId: id,
           error: err instanceof Error ? err.message : String(err),
+          stack: err instanceof Error ? err.stack : undefined,
+          txnAttempts,
         });
-        results.push({ id, error: err instanceof Error ? err.message : String(err) });
+        return { id, error: err instanceof Error ? err.message : String(err) };
       } finally {
+        unregister?.();
+        const endT0 = performance.now();
         await session.endSession();
+        const endMs = Math.round(performance.now() - endT0);
+        if (endMs >= 500) this.#logger.warn(`[sync-diag] slow session.endSession delete recId=${id} ms=${endMs}`);
       }
-    }
+    }));
 
-    return results;
+    return [...upsertResults, ...deleteResults];
   }
 
-  /** §6.9#14 — Retry a per-record write for transient I/O failures. */
+  /** §6.9#14 — Retry a per-record write for transient I/O failures with exponential backoff. */
   async #withRecordRetry(recordId: string, fn: () => Promise<void>): Promise<void> {
     for (let attempt = 1; ; attempt++) {
+      const attemptT0 = performance.now();
       try {
         await fn();
         return;
       } catch (err) {
-        if (attempt >= SYNC_MAX_RETRIES) throw err;
-        this.#logger.warn(`§6.9#14 Transient write failure for "${recordId}" (attempt ${attempt}/${SYNC_MAX_RETRIES}), retrying in ${SYNC_RETRY_DELAY_MS}ms`, { err });
-        await new Promise<void>(resolve => setTimeout(resolve, SYNC_RETRY_DELAY_MS));
+        const attemptMs = Math.round(performance.now() - attemptT0);
+        // Extract as much detail as possible — plain `err` serialises to `{}` for many
+        // Mongo errors because the enumerable fields aren't the useful ones.
+        const errAny = err as any;
+        const errDetails = {
+          name: errAny?.name,
+          message: errAny?.message ?? String(err),
+          code: errAny?.code,
+          codeName: errAny?.codeName,
+          errorLabels: errAny?.errorLabels,
+          hasErrorLabel: typeof errAny?.hasErrorLabel === 'function'
+            ? { TransientTransactionError: errAny.hasErrorLabel('TransientTransactionError'), UnknownTransactionCommitResult: errAny.hasErrorLabel('UnknownTransactionCommitResult') }
+            : undefined,
+          stack: errAny?.stack,
+        };
+        // Session-ended errors are NOT retryable. They occur when graceful shutdown's
+        // drain timeout fires `session.endSession()` on in-flight transactions: every
+        // parallel `sync()` call wakes up to find its session dead. Because `startSession`
+        // is called once outside this retry loop, retrying with the same dead session
+        // would fail immediately for all 20 attempts and waste ~2s of shutdown deadline.
+        // Throw immediately so the action surfaces the error to the client; the C2S
+        // pipeline will resend on reconnect. (Observed in stress logs as
+        // "MongoBulkWriteError: Cannot use a session that has ended" floods at the exact
+        // moment the server starts force-aborting stuck sessions during restart.)
+        const isSessionEnded = errAny?.name === 'MongoExpiredSessionError'
+          || /Cannot use a session that has ended/i.test(String(errAny?.message ?? ''));
+        if (isSessionEnded) {
+          this.#logger.warn(`§6.9#14 Session ended for "${recordId}" — not retryable (server shutting down?)`, errDetails);
+          throw err;
+        }
+        if (attempt >= SYNC_MAX_RETRIES) {
+          this.#logger.error(`§6.9#14 Final transient write failure for "${recordId}" after ${attempt} attempts (attemptMs=${attemptMs})`, errDetails);
+          throw err;
+        }
+        const delayMs = Math.min(SYNC_RETRY_MAX_DELAY_MS, SYNC_RETRY_BASE_DELAY_MS * 2 ** (attempt - 1));
+        this.#logger.warn(`§6.9#14 Transient write failure for "${recordId}" (attempt ${attempt}/${SYNC_MAX_RETRIES}, attemptMs=${attemptMs}), retrying in ${delayMs}ms`, errDetails);
+        await new Promise<void>(resolve => setTimeout(resolve, delayMs));
       }
     }
   }
@@ -541,11 +652,18 @@ export class ServerDbCollection<RecordType extends Record = Record> {
 
   async #writeRecords(records: RecordType[], session?: ClientSession) {
     if (records.length === 0) return;
+    const getColT0 = performance.now();
     const collection = await this.#getCollection();
+    const getColMs = Math.round(performance.now() - getColT0);
+    const bwT0 = performance.now();
     await collection.bulkWrite(
       records.map(record => ({ replaceOne: { replacement: dbUtils.serialize(record), filter: { _id: record.id as any }, upsert: true } })),
       session ? { session } : undefined,
     );
+    const bwMs = Math.round(performance.now() - bwT0);
+    if (bwMs >= 1_000 || getColMs >= 500) {
+      this.#logger.warn(`[sync-diag] slow #writeRecords "${this.#collection.name}" count=${records.length} getColMs=${getColMs} bulkWriteMs=${bwMs}`);
+    }
   }
 
   async #writeAuditRecords(
@@ -562,6 +680,7 @@ export class ServerDbCollection<RecordType extends Record = Record> {
         logger: this.#logger,
       }),
     );
+    const bwT0 = performance.now();
     try {
       await collection.bulkWrite(
         serverAudits.map(serverAudit => ({
@@ -573,7 +692,18 @@ export class ServerDbCollection<RecordType extends Record = Record> {
         })),
         session ? { session } : undefined,
       );
+      const bwMs = Math.round(performance.now() - bwT0);
+      if (bwMs >= 1_000) {
+        this.#logger.warn(`[sync-diag] slow #writeAuditRecords "${this.#collection.name}" count=${records.length} bulkWriteMs=${bwMs}`);
+      }
     } catch (error) {
+      const bwMs = Math.round(performance.now() - bwT0);
+      this.#logger.warn(`[sync-diag] #writeAuditRecords threw "${this.#collection.name}" count=${records.length} bulkWriteMs=${bwMs}`, {
+        error: (error as any)?.message ?? String(error),
+        code: (error as any)?.code,
+        codeName: (error as any)?.codeName,
+        errorLabels: (error as any)?.errorLabels,
+      });
       throw new InternalError({ error, message: `Failed to write audit records for "${this.#collection.name}".` });
     }
   }

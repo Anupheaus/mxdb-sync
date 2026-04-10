@@ -138,10 +138,14 @@ export class DbCollection<RecordType extends Record = Record> {
     const out: Array<MXDBActiveRecordState<RecordType> | MXDBDeletedRecordState> = [];
     for (const id of recordIds) {
       const audit = this.#auditRecords.get(id);
-      if (audit == null) continue;
+      if (audit == null) {
+        this.#logger?.silly(`[db-diag] getStatesSync "${this.#name}" MISS id=${id} auditRecordsSize=${this.#auditRecords.size} recordsSize=${this.#records.size} recordsHas=${this.#records.has(id)}`);
+        continue;
+      }
       const record = this.#records.get(id);
       if (record != null) out.push({ record, audit: audit.entries });
       else out.push({ recordId: id, audit: audit.entries });
+      this.#logger?.silly(`[db-diag] getStatesSync "${this.#name}" HIT id=${id} hasLive=${record != null} entries=${audit.entries.length} lastType=${audit.entries[audit.entries.length - 1]?.type} lastId=${audit.entries[audit.entries.length - 1]?.id}`);
     }
     return out;
   }
@@ -160,6 +164,27 @@ export class DbCollection<RecordType extends Record = Record> {
   }
 
   /**
+   * Synchronous read of every tracked audit, regardless of whether it has pending
+   * changes. Used by the CD's onStart sweep: on (re)connect the client pushes its
+   * full known state to the server so the SR can seed the SD filter AND detect
+   * disparities (e.g. records tombstoned on the server while the client was
+   * disconnected). Without this, branch-only records — those received via
+   * {@link applyServerWriteSync} and already collapsed — would be invisible to the
+   * reconnect handshake, and any server-side deletions that landed during the
+   * disconnect window would never reach the client.
+   */
+  @bind
+  public getAllStatesSync(): Array<MXDBActiveRecordState<RecordType> | MXDBDeletedRecordState> {
+    const out: Array<MXDBActiveRecordState<RecordType> | MXDBDeletedRecordState> = [];
+    for (const audit of this.#auditRecords.values()) {
+      const record = this.#records.get(audit.id);
+      if (record != null) out.push({ record, audit: audit.entries });
+      else out.push({ recordId: audit.id, audit: audit.entries });
+    }
+    return out;
+  }
+
+  /**
    * Apply an active record write coming from the server (CR.onUpdate).
    * Replaces the in-memory record and collapses its audit to a Branched anchor at lastAuditEntryId.
    */
@@ -168,27 +193,63 @@ export class DbCollection<RecordType extends Record = Record> {
     this.#records.set(record.id, record);
     const branchedAudit = auditor.createBranchFrom<RecordType>(record.id, lastAuditEntryId);
     this.#auditRecords.set(record.id, branchedAudit);
+    this.#logger?.silly(`[db-diag] applyServerWriteSync "${this.#name}" id=${record.id} anchor=${lastAuditEntryId} auditRecordsSizeAfter=${this.#auditRecords.size} recordsSizeAfter=${this.#records.size}`);
     void this.#persist([record], [branchedAudit]);
     this.#invokeOnChange({ type: 'upsert', records: [record], auditAction: 'branched' });
   }
 
   /**
    * Apply a delete coming from the server (CR.onUpdate).
-   * Removes the live record and the audit trail entirely (server is authoritative on delete).
+   *
+   * Splits the given ids into two buckets:
+   *
+   * 1. **Audits with pending local changes** — e.g. a local `Updated` entry that the CD has
+   *    not yet dispatched when an incoming S2C delete cursor lands. We remove the live row
+   *    (server is authoritative on deletion) but PRESERVE the audit so the pending entries
+   *    are not silently dropped. The ServerReceiver's `auditor.merge` keeps post-delete
+   *    `Updated` entries in the server audit (they change audit length without resurrecting
+   *    the record — only `Restored` can resurrect), and the truth oracle records them the
+   *    same way. If we wiped the audit here, client-side pending entries would vanish while
+   *    the truth oracle still had them → audit length mismatch. These ids are emitted with
+   *    `auditAction: 'markAsDeleted'` so `ClientToServerProvider` re-enqueues them and the
+   *    CD dispatches the pending entries (as a deleted-state payload) on its next tick.
+   *
+   * 2. **No pending changes** — branch-only audits or ids we don't know about. The audit
+   *    trail is cleared entirely (server is authoritative). Emitted with
+   *    `auditAction: 'remove'` (server-driven reconciliation — no C2S enqueue).
    */
   @bind
   public applyServerDeleteSync(recordIds: string[]): void {
     if (recordIds.length === 0) return;
-    const removed: string[] = [];
+    const fullyRemoved: string[] = [];
+    const preservedPending: string[] = [];
+    const fullyRemovedAuditIds: string[] = [];
     for (const id of recordIds) {
-      if (this.#records.delete(id)) removed.push(id);
-      else if (this.#auditRecords.has(id)) removed.push(id);
-      this.#auditRecords.delete(id);
+      const audit = this.#auditRecords.get(id);
+      const hadLive = this.#records.delete(id);
+      const hadAudit = audit != null;
+      const pending = hadAudit ? auditor.hasPendingChanges(audit) : false;
+      this.#logger?.silly(`[db-diag] applyServerDeleteSync "${this.#name}" id=${id} hadLive=${hadLive} hadAudit=${hadAudit} pending=${pending}`);
+      if (audit != null && pending) {
+        // Keep the audit so CD can still push the pending entries to the server.
+        if (hadLive || audit != null) preservedPending.push(id);
+        continue;
+      }
+      if (hadLive || audit != null) fullyRemoved.push(id);
+      if (audit != null) {
+        this.#auditRecords.delete(id);
+        fullyRemovedAuditIds.push(id);
+      }
     }
-    if (removed.length === 0) return;
-    void this.#deleteLiveRowsOnly(removed);
-    void this.#deleteAuditRowsOnly(removed);
-    this.#invokeOnChange({ type: 'remove', ids: removed, auditAction: 'remove' });
+    const liveIdsToDelete = [...fullyRemoved, ...preservedPending];
+    if (liveIdsToDelete.length > 0) void this.#deleteLiveRowsOnly(liveIdsToDelete);
+    if (fullyRemovedAuditIds.length > 0) void this.#deleteAuditRowsOnly(fullyRemovedAuditIds);
+    if (fullyRemoved.length > 0) {
+      this.#invokeOnChange({ type: 'remove', ids: fullyRemoved, auditAction: 'remove' });
+    }
+    if (preservedPending.length > 0) {
+      this.#invokeOnChange({ type: 'remove', ids: preservedPending, auditAction: 'markAsDeleted' });
+    }
   }
 
   /**

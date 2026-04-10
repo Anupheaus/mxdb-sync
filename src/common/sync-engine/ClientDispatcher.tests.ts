@@ -11,7 +11,6 @@ vi.mock('../auditor/hash', () => ({
 import {
   ClientDispatcher,
   ClientReceiver,
-  type MXDBRecordStates,
   type MXDBSyncEngineResponse,
   type MXDBUpdateRequest,
 } from '.';
@@ -221,7 +220,7 @@ describe('ClientDispatcher', () => {
     const audit1 = auditor.createAuditFrom(record1);
     const audit2 = auditor.createAuditFrom(record2);
 
-    const onPayloadRequest = vi.fn().mockImplementation((req: any) => {
+    const onPayloadRequest = vi.fn().mockImplementation((_req: any) => {
       // Return states for both requested records
       return [{
         collectionName: 'items',
@@ -341,9 +340,7 @@ describe('ClientDispatcher', () => {
     // while it sits in the CD queue, onPayloadRequest will not return a state
     // for it. Without the drop-filter, the stale queue entry would live forever.
     const cr = makeCR();
-    const record1 = makeRecord('r1', 'Alice');
     const record2 = makeRecord('r2', 'Bob');
-    const audit1 = auditor.createAuditFrom(record1);
     const audit2 = auditor.createAuditFrom(record2);
 
     // onPayloadRequest returns ONLY r2 — r1 has disappeared locally

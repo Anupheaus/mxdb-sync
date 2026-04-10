@@ -11,7 +11,7 @@ export async function handleGetAll(params: { collectionName: string }) {
   const records = await dbCollection.getAll();
   if (records.length === 0) return [];
 
-  await s2c.seedActive(collectionName, records);
+  await s2c.pushActive(collectionName, records);
 
   return records.ids();
 }

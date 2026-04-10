@@ -39,6 +39,7 @@ export async function startAuthenticatedServer({
   changeStreamDebounceMs,
   ...config
 }: Props) {
+  logger?.info('[startAuthenticatedServer] calling startSocketServer', { actionCount: internalActions.length + (actions?.length ?? 0), subCount: internalSubscriptions.length + (subscriptions?.length ?? 0) });
   const { app } = await startSocketServer({
     ...config,
     logger,
@@ -56,16 +57,26 @@ export async function startAuthenticatedServer({
     },
 
     async onStartup() {
+      logger?.info('[startAuthenticatedServer] onStartup.begin');
       const { impersonateUser } = useSocketAPI();
 
       await impersonateUser(adminUser, async () => {
         const startupLogger = (logger ?? Logger.getCurrent() ?? new Logger('mxdb-sync')).createSubLogger('s2c:startup');
         setServerToClientSync(ServerToClientSynchronisation.createNoOp(collections, startupLogger));
         const startTime = Date.now();
-        if (shouldSeedCollections === true) await seedCollections(collections);
+        if (shouldSeedCollections === true) {
+          logger?.info('[startAuthenticatedServer] seedCollections.begin');
+          await seedCollections(collections);
+          logger?.info('[startAuthenticatedServer] seedCollections.done', { ms: Date.now() - startTime });
+        }
         console.log(`Seeding took ${Date.now() - startTime}ms`); // eslint-disable-line no-console
-        await config.onStartup?.();
+        if (config.onStartup != null) {
+          logger?.info('[startAuthenticatedServer] config.onStartup.begin');
+          await config.onStartup();
+          logger?.info('[startAuthenticatedServer] config.onStartup.done');
+        }
       });
+      logger?.info('[startAuthenticatedServer] onStartup.done');
     },
 
     // ─── Token validation + rotation ────────────────────────────────────
@@ -148,5 +159,6 @@ export async function startAuthenticatedServer({
     },
   });
 
+  logger?.info('[startAuthenticatedServer] startSocketServer returned', { hasApp: app != null });
   return { app };
 }

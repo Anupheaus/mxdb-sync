@@ -6,8 +6,8 @@
  *
  * E2e stress policy: no `Branched` audit entries — `truthVsServerAuditCompare` treats them as errors on truth or server.
  */
-import type { AuditOf } from '../../../src/common';
-import { auditor } from '../../../src/common';
+import type { AuditOf, AuditDeletedEntry } from '../../../src/common';
+import { auditor, AuditEntryType } from '../../../src/common';
 import type { E2eTestRecord } from '../setup/types';
 import { e2eTestRecordsEqual } from './stressIntegrityAssertions';
 
@@ -29,27 +29,53 @@ export function recordHarnessUpsert(clientId: string, prev: E2eTestRecord | unde
   if (next.clientId !== clientId) {
     throw new Error(`recordHarnessUpsert: clientId mismatch (arg "${clientId}" vs record "${next.clientId}")`);
   }
-  harnessMutationCount += 1;
   const nextClone = cloneRecord(next);
   const existing = auditByRecordId.get(next.id);
   if (existing == null) {
+    harnessMutationCount += 1;
     auditByRecordId.set(next.id, auditor.createAuditFrom(nextClone));
     return;
   }
+  // Post-delete updates are NOT a no-op: the server's auditor.merge sorts incoming client
+  // entries by ULID and keeps everything, including Updated entries whose ULID happens to
+  // fall after a Delete (e.g. a stale client whose view predates the delete). Replay still
+  // resolves the live row to undefined (Restored is the only entry type that can resurrect,
+  // and that path is not yet implemented), so post-delete Updated entries change the audit
+  // length without resurrecting the record. Truth must mirror this exactly or audit-length
+  // comparisons report phantom mismatches.
+  //
+  // Pass `prev` as baseRecord so updateAuditWith skips its `existingRecord == null` branch
+  // (which would otherwise call appendResurrectionEntries → Restored). With prev provided
+  // we always go down the recordDiff → Updated path, regardless of whether the audit is
+  // currently tombstoned. Workloads always supply a real prev for non-create upserts, so
+  // the undefined-prev case never collides with a tombstoned audit in practice.
+  harnessMutationCount += 1;
   auditByRecordId.set(
     next.id,
     auditor.updateAuditWith(nextClone, existing, prev ?? undefined),
   );
 }
 
-/** Log a successful remove (same audit effect as client {@link DbCollection.delete} with default audit). */
+/** Log a successful remove. Mirrors server merge: every successful client delete contributes
+ * a fresh Deleted entry, even if the audit was already tombstoned by a racing client (the
+ * two delete entries have distinct ULIDs and both end up in the merged server audit).
+ *
+ * `auditor.delete` short-circuits when isDeleted, so we build the entry directly to bypass
+ * that and match server-side merge semantics exactly. */
 export function recordHarnessDelete(recordId: string): void {
   const existing = auditByRecordId.get(recordId);
   if (existing == null) {
     throw new Error(`recordHarnessDelete: no truth audit for record "${recordId}"`);
   }
   harnessMutationCount += 1;
-  auditByRecordId.set(recordId, auditor.delete(existing));
+  const deletedEntry: AuditDeletedEntry = {
+    type: AuditEntryType.Deleted,
+    id: auditor.generateUlid(),
+  };
+  auditByRecordId.set(recordId, {
+    ...existing,
+    entries: [...auditor.entriesOf(existing), deletedEntry],
+  });
 }
 
 /** Immutable snapshot: record id → audit document (entries match client/server audit shapes). */

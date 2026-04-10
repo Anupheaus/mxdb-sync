@@ -408,8 +408,19 @@ export function hasPendingChanges<T extends MXDBRecord>(audit: AnyAuditOf<T>): b
 
 export function isDeleted<T extends MXDBRecord>(audit: AnyAuditOf<T>): boolean {
   if (!isAuditDocument(audit)) return false;
-  const last = [...entriesOf(audit)].reverse().find(e => e.type !== AuditEntryType.Branched);
-  return last?.type === AuditEntryType.Deleted;
+  // Delete-is-final: find the latest Deleted or Restored entry by ULID order. Updates after
+  // a Delete (higher ULIDs, still appended to the audit because merge does not prune them)
+  // must NOT flip the tombstone state — only a subsequent Restored can. Previously this
+  // scanned the array in insertion order and returned the last non-Branched entry, which
+  // silently resurrected tombstoned records whenever a post-delete Update merged in and
+  // caused `#buildAndPush` to bypass the §10.1 filter and push a stale cursor to a client
+  // that had branched at an earlier entry.
+  let latestTransition: { type: AuditEntryType; id: string } | undefined;
+  for (const e of entriesOf(audit)) {
+    if (e.type !== AuditEntryType.Deleted && e.type !== AuditEntryType.Restored) continue;
+    if (latestTransition == null || e.id > latestTransition.id) latestTransition = e;
+  }
+  return latestTransition?.type === AuditEntryType.Deleted;
 }
 
 export function isBranchOnly<T extends MXDBRecord>(audit: AnyAuditOf<T>): boolean {

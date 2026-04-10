@@ -11,7 +11,7 @@ export async function handleDistinct({ collectionName, field, filters, sorts }: 
   const records = await dbCollection.distinct({ field, filters, sorts });
   if (records == null || records.length === 0) return [];
 
-  await s2c.seedActive(collectionName, records);
+  await s2c.pushActive(collectionName, records);
 
   return records.ids().join('|').hash();
 }

@@ -67,17 +67,29 @@ describe('recordsOfTruth (audit-backed)', () => {
     expect(getTruthAudits().has('1')).toBe(true);
   });
 
-  it('upsert after delete appends Restored (prev undefined)', () => {
+  it('post-delete upsert appends Updated entry but does not resurrect (mirrors server merge)', () => {
+    const r1 = row('1', 'a', 10, 'v10');
+    recordHarnessUpsert('a', undefined, r1);
+    recordHarnessDelete('1');
+    const before = auditor.entriesOf(getTruthAudits().get('1')!).length;
+    // A racing client with a stale view (prev = active record) updates the record. The
+    // server's auditor.merge will accept this entry by ULID order; truth must do the same.
+    recordHarnessUpsert('b', r1, { ...r1, clientId: 'b', testDate: 20, value: 'v20' });
+    const entries = auditor.entriesOf(getTruthAudits().get('1')!);
+    expect(entries.length).toBe(before + 1);
+    expect(entries[entries.length - 1]!.type).toBe(AuditEntryType.Updated);
+    // Live row stays gone — only Restored entries can resurrect.
+    expect(getExpectedState().size).toBe(0);
+  });
+
+  it('delete after delete appends a second Deleted entry (mirrors server merge)', () => {
     recordHarnessUpsert('a', undefined, row('1', 'a', 10, 'v10'));
     recordHarnessDelete('1');
-    const restored = row('1', 'b', 20, 'v20');
-    recordHarnessUpsert('b', undefined, restored);
-    const m = getExpectedState();
-    expect(m.size).toBe(1);
-    expect(m.get('1')).toEqual(restored);
+    const before = auditor.entriesOf(getTruthAudits().get('1')!).length;
+    recordHarnessDelete('1');
     const entries = auditor.entriesOf(getTruthAudits().get('1')!);
-    expect(entries.some(e => e.type === AuditEntryType.Deleted)).toBe(true);
-    expect(entries.some(e => e.type === AuditEntryType.Restored)).toBe(true);
+    expect(entries.length).toBe(before + 1);
+    expect(entries[entries.length - 1]!.type).toBe(AuditEntryType.Deleted);
   });
 
   it('recordHarnessUpsert rejects clientId mismatch', () => {

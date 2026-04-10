@@ -11,7 +11,7 @@ export async function handleQuery(params: { collectionName: string;[key: string]
   const { data: records, total } = await dbCollection.query(request);
   if (records.length === 0) return [];
 
-  await s2c.seedActive(collectionName, records);
+  await s2c.pushActive(collectionName, records);
 
   return total;
 }

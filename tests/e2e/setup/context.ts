@@ -126,7 +126,18 @@ export async function setupE2E(options?: SetupE2EOptions): Promise<void> {
     log(event, detail) {
       if (event === 'app_logger' && detail != null) {
         const lvl = String((detail as { level?: string }).level ?? '').toLowerCase();
-        if (lvl === 'error') appLoggerErrorStats.count += 1;
+        if (lvl === 'error') {
+          // Socket transport errors (e.g. `Socket connection error: websocket error`) are
+          // logged by socket-api's SocketProvider whenever a `connect_error` event fires.
+          // During tests that intentionally restart the server mid-workload, every connected
+          // client will see one such event per restart — the socket layer then reconnects
+          // and operation continues normally. They're not correctness failures, so exclude
+          // them from the stress-test error assertion.
+          const msg = String((detail as { message?: string }).message ?? '');
+          if (!/^Socket connection error:/i.test(msg)) {
+            appLoggerErrorStats.count += 1;
+          }
+        }
       }
       baseRunLogger.log(event, detail);
     },

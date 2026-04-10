@@ -18,9 +18,13 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 20
+          registry-url: https://npm.pkg.github.com
+          scope: '@anupheaus'
       - name: Remove local file overrides
         run: node -e "const fs=require('fs');const p=JSON.parse(fs.readFileSync('package.json','utf8'));delete p.pnpm;fs.writeFileSync('package.json',JSON.stringify(p,null,2)+'\n');"
       - run: pnpm install --no-frozen-lockfile
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       - name: Archive workspace
         run: tar -czf /tmp/workspace.tar.gz --exclude='.git' .
       - uses: actions/upload-artifact@v4

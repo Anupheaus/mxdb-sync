@@ -20,7 +20,7 @@ jobs:
           node-version: 20
       - name: Remove local file overrides
         run: node -e "const fs=require('fs');const p=JSON.parse(fs.readFileSync('package.json','utf8'));delete p.pnpm;fs.writeFileSync('package.json',JSON.stringify(p,null,2)+'\n');"
-      - run: pnpm install
+      - run: pnpm install --no-frozen-lockfile
       - name: Archive workspace
         run: tar -czf /tmp/workspace.tar.gz --exclude='.git' .
       - uses: actions/upload-artifact@v4

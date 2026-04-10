@@ -12,19 +12,18 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - name: Checkout sibling repos
+        run: |
+          git clone https://github.com/Anupheaus/common.git ../common
+          git clone https://github.com/Anupheaus/socket-api.git ../socket-api
+          git clone https://github.com/Anupheaus/react-ui.git ../react-ui
       - uses: pnpm/action-setup@v4
         with:
           version: latest
       - uses: actions/setup-node@v4
         with:
           node-version: 20
-          registry-url: https://npm.pkg.github.com
-          scope: '@anupheaus'
-      - name: Remove local file overrides
-        run: node -e "const fs=require('fs');const p=JSON.parse(fs.readFileSync('package.json','utf8'));delete p.pnpm;fs.writeFileSync('package.json',JSON.stringify(p,null,2)+'\n');"
-      - run: pnpm install --no-frozen-lockfile
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - run: pnpm install
       - name: Archive workspace
         run: tar -czf /tmp/workspace.tar.gz --exclude='.git' .
       - uses: actions/upload-artifact@v4

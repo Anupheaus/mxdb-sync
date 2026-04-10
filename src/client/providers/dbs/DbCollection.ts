@@ -281,7 +281,14 @@ export class DbCollection<RecordType extends Record = Record> {
     let newAuditRecord: AuditOf<RecordType>;
     if (auditAction === 'branched') {
       const anchorUlid = branchUlid ?? ulid();
-      newAuditRecord = auditor.createBranchFrom<RecordType>(record.id, anchorUlid);
+      if (existingAudit != null) {
+        // Collapse existing audit to the anchor, preserving any pending entries
+        // the server hasn't seen yet (e.g. mutations made while offline or
+        // between a C2S dispatch and the S2C push arriving).
+        newAuditRecord = auditor.collapseToAnchor(existingAudit, anchorUlid) as AuditOf<RecordType>;
+      } else {
+        newAuditRecord = auditor.createBranchFrom<RecordType>(record.id, anchorUlid);
+      }
     } else if (existingAudit != null) {
       // Pass oldRecord directly as the diff baseline. oldRecord is the current in-memory state
       // (which already has all pending audit ops applied). Calling createRecordFrom(audit, oldRecord)

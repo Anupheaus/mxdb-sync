@@ -41,6 +41,6 @@ vi.mock('../../../src/client/utils/actionTimeout', async importOriginal => {
   const actual = await importOriginal<typeof import('../../../src/client/utils/actionTimeout')>();
   return {
     ...actual,
-    ACTION_TIMEOUT_MS: 45_000,
+    ACTION_TIMEOUT_MS: 20_000,
   };
 });

@@ -1,10 +1,16 @@
 import type { E2eTestMetadata, E2eTestRecord } from '../setup/types';
-import { CRUD_GAP_MAX_MS, CRUD_GAP_MIN_MS } from './config';
+import { CRUD_GAP_MAX_MS, CRUD_GAP_MIN_MS, NETWORK_LATENCY_MIN_MS, NETWORK_LATENCY_MAX_MS } from './config';
 
 const rand = () => Math.random().toString(36).slice(2, 9);
 
 export function randomCrudGap(): Promise<void> {
   const ms = CRUD_GAP_MIN_MS + Math.random() * (CRUD_GAP_MAX_MS - CRUD_GAP_MIN_MS);
+  return new Promise(r => setTimeout(r, ms));
+}
+
+/** Simulates network round-trip latency before a CRUD operation completes. */
+export function networkLatencyDelay(): Promise<void> {
+  const ms = NETWORK_LATENCY_MIN_MS + Math.random() * (NETWORK_LATENCY_MAX_MS - NETWORK_LATENCY_MIN_MS);
   return new Promise(r => setTimeout(r, ms));
 }
 

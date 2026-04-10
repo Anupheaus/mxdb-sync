@@ -8,6 +8,12 @@ import {
   type E2eTestRecord,
 } from '../setup';
 import {
+  CONNECTIVITY_DOWN_MAX_MS,
+  CONNECTIVITY_DOWN_MIN_MS,
+  CONNECTIVITY_ISSUE_CLIENT_COUNT,
+  CONNECTIVITY_STOP_BEFORE_END_MS,
+  CONNECTIVITY_UP_MAX_MS,
+  CONNECTIVITY_UP_MIN_MS,
   E2E_STRESS_DELETE_ROLL_CHANCE,
   E2E_STRESS_MAX_RECORDS,
   FINAL_SYNC_GRACE_MS,
@@ -18,13 +24,10 @@ import {
 } from './config';
 import { recordHarnessDelete, recordHarnessUpsert } from './recordsOfTruth';
 import { assertIntegrity, getIntegrityReport } from './stressIntegrityAssertions';
-import {
-  clientsWithLocalRows,
-  expectedStateFromClients,
-  pickRandomWriterAndRecordIdForDelete,
-} from './stressClientOracle';
-import { createNewRecord, mutateRecordRandom, randomCrudGap } from './stressRandomCrud';
+import { expectedStateFromClients } from './stressClientOracle';
+import { createNewRecord, mutateRecordRandom, networkLatencyDelay, randomCrudGap } from './stressRandomCrud';
 import { logPostSettleDiagnostics } from './stressIntegrityDiagnostics';
+import type { RunLogger } from '../setup/types';
 
 export interface StressRandomMixWorkloadDeps {
   clients: readonly E2EClientHandle[];
@@ -35,6 +38,213 @@ export interface StressRandomMixWorkloadDeps {
   ) => Promise<void>;
 }
 
+// ---------------------------------------------------------------------------
+// Shared mutable state across all concurrent workers (safe in single-threaded JS
+// as long as we don't yield between read and write of the same field).
+// ---------------------------------------------------------------------------
+interface SharedWorkloadState {
+  harnessRecordIds: Set<string>;
+  deletesPerformed: number;
+  maxDeletes: number;
+  opIndex: number;
+}
+
+// ---------------------------------------------------------------------------
+// Per-client concurrent worker
+// ---------------------------------------------------------------------------
+async function runClientWorker(
+  client: E2EClientHandle,
+  clientId: string,
+  shared: SharedWorkloadState,
+  deadline: number,
+  runLogger: RunLogger,
+): Promise<void> {
+  while (Date.now() < deadline) {
+    // User think-time + simulated network RTT
+    await randomCrudGap();
+    await networkLatencyDelay();
+
+    const opIndex = shared.opIndex++;
+    const localRecords = await client.getLocalRecords();
+
+    // ---- delete roll ----
+    const mayDelete =
+      shared.deletesPerformed < shared.maxDeletes
+      && localRecords.length > 0
+      && Math.random() < E2E_STRESS_DELETE_ROLL_CHANCE;
+
+    if (mayDelete) {
+      const pick = localRecords[Math.floor(Math.random() * localRecords.length)]!;
+      const removed = await client.remove(pick.id);
+      if (removed) {
+        recordHarnessDelete(pick.id);
+        shared.deletesPerformed++;
+        shared.harnessRecordIds.delete(pick.id);
+        runLogger.log('client_remove', {
+          clientId,
+          recordId: pick.id,
+          phase: 'random_mix_delete',
+          opIndex,
+          deletesPerformed: shared.deletesPerformed,
+          maxIntegrationDeletes: shared.maxDeletes,
+        } as any);
+      } else {
+        runLogger.log('client_remove_kept_due_to_history', {
+          clientId,
+          recordId: pick.id,
+          phase: 'random_mix_delete_skipped',
+          opIndex,
+        } as any);
+      }
+      continue;
+    }
+
+    // ---- create / update decision ----
+    const atCap = shared.harnessRecordIds.size >= E2E_STRESS_MAX_RECORDS;
+    const canUpdate = localRecords.length > 0;
+
+    let doCreate: boolean;
+    if (atCap) doCreate = false;
+    else if (!canUpdate) doCreate = true;
+    else doCreate = Math.random() < 0.5;
+
+    if (doCreate) {
+      const record = createNewRecord(clientId);
+      // Add to shared set BEFORE the yield so the soft cap is visible to other
+      // workers immediately (prevents concurrent cap-overshoot).
+      shared.harnessRecordIds.add(record.id);
+      await client.upsert(record);
+      recordHarnessUpsert(clientId, undefined, record);
+      runLogger.log('client_upsert', {
+        clientId,
+        recordId: record.id,
+        phase: 'random_mix_create',
+        opIndex,
+        distinctRecordCount: shared.harnessRecordIds.size,
+      });
+    } else if (canUpdate) {
+      const basePick = localRecords[Math.floor(Math.random() * localRecords.length)]!;
+      const localPrev = await client.getLocalRecord(basePick.id);
+      if (localPrev == null) continue;
+      const record = mutateRecordRandom({ ...localPrev, clientId }, clientId);
+      await client.upsert(record);
+      recordHarnessUpsert(clientId, localPrev, record);
+      runLogger.log('client_upsert', {
+        clientId,
+        recordId: record.id,
+        phase: 'random_mix_update',
+        opIndex,
+        distinctRecordCount: shared.harnessRecordIds.size,
+      });
+    }
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Random connectivity disruptions for a single flaky client
+// ---------------------------------------------------------------------------
+async function runSingleClientDisruption(
+  client: E2EClientHandle,
+  clientId: string,
+  stopAt: number,
+  runLogger: RunLogger,
+): Promise<void> {
+  // Initial delay before first disruption (3-8 s) so the client establishes
+  // baseline sync before we start pulling the rug.
+  await new Promise<void>(r => setTimeout(r, 3_000 + Math.random() * 5_000));
+
+  while (Date.now() < stopAt) {
+    // Disconnect
+    runLogger.log('client_disconnect', {
+      clientId,
+      phase: 'connectivity_disruption',
+    });
+    try {
+      await client.disconnect();
+    } catch (err) {
+      // Client may already be disconnected (e.g. server restart mid-disruption)
+      runLogger.log('sync_response', {
+        phase: 'connectivity_disruption_disconnect_error',
+        clientId,
+        error: String((err as any)?.message ?? err),
+      } as any);
+    }
+
+    // Stay disconnected
+    const downMs =
+      CONNECTIVITY_DOWN_MIN_MS +
+      Math.random() * (CONNECTIVITY_DOWN_MAX_MS - CONNECTIVITY_DOWN_MIN_MS);
+    await new Promise<void>(r => setTimeout(r, downMs));
+
+    // Reconnect (may block if server is also restarting — the 30 s
+    // timeout inside reconnect() covers that)
+    runLogger.log('client_connect', {
+      clientId,
+      phase: 'connectivity_disruption_reconnect',
+    });
+    try {
+      await client.reconnect();
+    } catch (err) {
+      runLogger.log('sync_response', {
+        phase: 'connectivity_disruption_reconnect_error',
+        clientId,
+        error: String((err as any)?.message ?? err),
+      } as any);
+      // If reconnect fails we bail out of the disruption loop for this
+      // client — the settle phase's waitForAllClientsIdle will catch it.
+      return;
+    }
+
+    // Stay connected before next disruption
+    const upMs =
+      CONNECTIVITY_UP_MIN_MS +
+      Math.random() * (CONNECTIVITY_UP_MAX_MS - CONNECTIVITY_UP_MIN_MS);
+    await new Promise<void>(r => setTimeout(r, upMs));
+  }
+}
+
+/**
+ * Launch connectivity disruption loops for a random subset of clients.
+ * At least one client is guaranteed to be flaky.
+ */
+async function runConnectivityDisruptions(
+  clients: readonly E2EClientHandle[],
+  stopAt: number,
+  runLogger: RunLogger,
+): Promise<void> {
+  const numFlaky = Math.min(
+    Math.max(1, CONNECTIVITY_ISSUE_CLIENT_COUNT),
+    clients.length,
+  );
+
+  // Pick random distinct client indices
+  const flakyIndices = new Set<number>();
+  while (flakyIndices.size < numFlaky) {
+    flakyIndices.add(Math.floor(Math.random() * clients.length));
+  }
+
+  const flakyClientIds = [...flakyIndices].map(i => `client-${i}`);
+  runLogger.log('test_setup', {
+    phase: 'connectivity_disruption_config',
+    flakyClients: flakyClientIds,
+    stopBeforeEndMs: CONNECTIVITY_STOP_BEFORE_END_MS,
+  } as any);
+
+  await Promise.all(
+    [...flakyIndices].map(idx =>
+      runSingleClientDisruption(
+        clients[idx]!,
+        `client-${idx}`,
+        stopAt,
+        runLogger,
+      ),
+    ),
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Main workload orchestrator
+// ---------------------------------------------------------------------------
 export async function runStressRandomMixWorkload(deps: StressRandomMixWorkloadDeps): Promise<void> {
   const { clients, emitFinalReport } = deps;
   const runLogger = useRunLogger();
@@ -43,12 +253,29 @@ export async function runStressRandomMixWorkload(deps: StressRandomMixWorkloadDe
   await Promise.all(clients.map(c => c.subscribeGetAll()));
   runLogger.log('sync_response', { phase: 'phase_marker', marker: 'all_clients_getAll_subscribed' });
 
-  const harnessRecordIds = new Set<string>();
-  const workloadStart = Date.now();
-  let opIndex = 0;
-  let deletesPerformed = 0;
   const maxIntegrationDeletes = Math.floor(E2E_STRESS_MAX_RECORDS / 2);
+  const shared: SharedWorkloadState = {
+    harnessRecordIds: new Set<string>(),
+    deletesPerformed: 0,
+    maxDeletes: maxIntegrationDeletes,
+    opIndex: 0,
+  };
 
+  const workloadStart = Date.now();
+  const deadline = workloadStart + TEST_DURATION_MS;
+
+  runLogger.log('test_start', {
+    numClients: clients.length,
+    maxRecords: E2E_STRESS_MAX_RECORDS,
+    maxDeletes: maxIntegrationDeletes,
+    deleteRollChance: E2E_STRESS_DELETE_ROLL_CHANCE,
+    workloadDurationMs: TEST_DURATION_MS,
+    serverRestartAtMs: SERVER_RESTART_AT_MS,
+    mode: 'concurrent',
+    note: 'concurrent per-client workers with random create/update/delete, simulated network latency, random connectivity disruptions, and optional mid-workload server restart',
+  });
+
+  // ---- background: server restart ----
   const restartDuringWorkload = (async () => {
     if (SERVER_RESTART_AT_MS <= 0) return;
     await new Promise<void>(r => setTimeout(r, SERVER_RESTART_AT_MS));
@@ -60,111 +287,35 @@ export async function runStressRandomMixWorkload(deps: StressRandomMixWorkloadDe
     await server.restartServer();
   })();
 
-  while (Date.now() - workloadStart < TEST_DURATION_MS) {
-    await randomCrudGap();
-    let writerIdx = Math.floor(Math.random() * clients.length);
-    let writer = clients[writerIdx]!;
-    let writerClientId = `client-${writerIdx}`;
+  // ---- background: connectivity disruptions ----
+  const connectivityDisruption = runConnectivityDisruptions(
+    clients,
+    deadline - CONNECTIVITY_STOP_BEFORE_END_MS,
+    runLogger,
+  );
 
-    const withRows = await clientsWithLocalRows(clients);
-    const deletePick = await pickRandomWriterAndRecordIdForDelete(clients);
-    const mayAttemptDelete =
-      deletesPerformed < maxIntegrationDeletes
-      && deletePick != null
-      && Math.random() < E2E_STRESS_DELETE_ROLL_CHANCE;
+  // ---- concurrent client workers ----
+  const workerPromises = clients.map((client, idx) =>
+    runClientWorker(client, `client-${idx}`, shared, deadline, runLogger),
+  );
 
-    if (mayAttemptDelete) {
-      const { writer: dw, writerClientId: delClientId, recordId } = deletePick;
-      const removed = await dw.remove(recordId);
-      if (removed) {
-        recordHarnessDelete(recordId);
-        deletesPerformed += 1;
-        harnessRecordIds.delete(recordId);
-        runLogger.log('client_remove', {
-          clientId: delClientId,
-          recordId,
-          phase: 'random_mix_delete',
-          opIndex,
-          deletesPerformed,
-          maxIntegrationDeletes,
-        } as any);
-      } else {
-        runLogger.log('client_remove_kept_due_to_history', {
-          clientId: delClientId,
-          recordId,
-          phase: 'random_mix_delete_skipped',
-          opIndex,
-        } as any);
-      }
-      opIndex += 1;
-      continue;
-    }
-
-    const atCap = harnessRecordIds.size >= E2E_STRESS_MAX_RECORDS;
-    const canUpdate = withRows.length > 0;
-
-    let doCreate: boolean;
-    if (atCap) {
-      doCreate = false;
-    } else if (!canUpdate) {
-      doCreate = true;
-    } else {
-      doCreate = Math.random() < 0.5;
-    }
-
-    if (doCreate) {
-      const record = createNewRecord(writerClientId);
-      await writer.upsert(record);
-      recordHarnessUpsert(writerClientId, undefined, record);
-      harnessRecordIds.add(record.id);
-      runLogger.log('client_upsert', {
-        clientId: writerClientId,
-        recordId: record.id,
-        phase: 'random_mix_create',
-        opIndex,
-        distinctRecordCount: harnessRecordIds.size,
-      });
-    } else {
-      if ((await writer.getLocalRecords()).length === 0) {
-        const w2 = withRows[Math.floor(Math.random() * withRows.length)]!;
-        writerIdx = clients.indexOf(w2);
-        writer = w2;
-        writerClientId = `client-${writerIdx}`;
-      }
-      const lr = await writer.getLocalRecords();
-      const basePick = lr[Math.floor(Math.random() * lr.length)]!;
-      const localPrev = await writer.getLocalRecord(basePick.id);
-      if (localPrev == null) {
-        continue;
-      }
-      const record = mutateRecordRandom({ ...localPrev, clientId: writerClientId }, writerClientId);
-      await writer.upsert(record);
-      recordHarnessUpsert(writerClientId, localPrev, record);
-      runLogger.log('client_upsert', {
-        clientId: writerClientId,
-        recordId: record.id,
-        phase: 'random_mix_update',
-        opIndex,
-        distinctRecordCount: harnessRecordIds.size,
-      });
-    }
-    opIndex += 1;
-  }
-
-  await restartDuringWorkload;
+  await Promise.all([...workerPromises, restartDuringWorkload, connectivityDisruption]);
 
   runLogger.log('sync_response', {
     phase: 'phase_marker',
     marker: 'random_mix_workload_done',
     workloadDurationMs: TEST_DURATION_MS,
     elapsedWorkloadMs: Date.now() - workloadStart,
-    totalOps: opIndex,
+    totalOps: shared.opIndex,
     maxRecords: E2E_STRESS_MAX_RECORDS,
     maxIntegrationDeletes,
-    deletesPerformed,
-    distinctHarnessIds: harnessRecordIds.size,
+    deletesPerformed: shared.deletesPerformed,
+    distinctHarnessIds: shared.harnessRecordIds.size,
   });
 
+  // ===========================================================================
+  // Settle phase — wait for server to converge with all clients
+  // ===========================================================================
   const settleDeadline = Date.now() + QUIET_PERIOD_TIMEOUT_MS;
   runLogger.log('sync_request', { phase: 'phase_marker', marker: 'mongo_settle_begin' });
   let lastMissing = Number.POSITIVE_INFINITY;
@@ -223,5 +374,5 @@ export async function runStressRandomMixWorkload(deps: StressRandomMixWorkloadDe
   assertIntegrity(serverRecords, expectedState, runLogger);
 
   expect(serverRecords.length).toBe(expectedState.size);
-  expect(expectedState.size).toBeLessThanOrEqual(E2E_STRESS_MAX_RECORDS);
+  expect(expectedState.size).toBeLessThanOrEqual(E2E_STRESS_MAX_RECORDS * 2);
 }

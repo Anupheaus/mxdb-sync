@@ -66,7 +66,12 @@ export class ClientDispatcher {
     if (this.#started) return;
     this.#started = true;
     this.#logger.info('[CD] starting');
-    void this.#doStart();
+    void this.#doStart().catch(err => {
+      this.#logger.error('[CD] #doStart unhandled error', {
+        error: (err as any)?.message ?? String(err),
+        stack: (err as any)?.stack,
+      });
+    });
   }
 
   stop(): void {
@@ -79,6 +84,13 @@ export class ClientDispatcher {
     this.#timerResolve = undefined;
     this.#queue = [];
     this.#pendingReEnqueue.clear();
+    // Reset in-flight / dispatching state here since the stale coroutine's
+    // finally block will skip the reset (epoch mismatch guard).
+    if (this.#inFlight) {
+      this.#inFlight = false;
+      this.#props.onDispatching(false);
+      this.#props.clientReceiver.resume();
+    }
     this.#started = false;
     this.#logger.info('[CD] stopped');
   }
@@ -139,9 +151,14 @@ export class ClientDispatcher {
         this.#logger.warn('[CD] onStart dispatch failed, retrying', { error: err });
         // Fall through to retry delay
       } finally {
-        this.#inFlight = false;
-        this.#props.onDispatching(false);
-        this.#props.clientReceiver.resume();
+        // Only mutate shared state if this coroutine still owns the current epoch.
+        // A stop() → start() cycle may have launched a new #doStart whose
+        // pause/inFlight state we must not clobber.
+        if (this.#epoch === dispatchEpoch) {
+          this.#inFlight = false;
+          this.#props.onDispatching(false);
+          this.#props.clientReceiver.resume();
+        }
       }
 
       // Retry delay — reuses #timer
@@ -160,9 +177,17 @@ export class ClientDispatcher {
 
   #startTimer(): void {
     const interval = this.#props.timerInterval ?? 250;
-    this.#timer = setTimeout(async () => {
+    this.#timer = setTimeout(() => {
       this.#timer = undefined;
-      await this.#timerTick();
+      // #timerTick is async but called from setTimeout. Attach a .catch() so
+      // that any rejection that escapes #timerTick's internal try/catch (e.g.
+      // socket.io _clearAcks firing a rejection after the transport closes)
+      // is captured instead of surfacing as an unhandled promise rejection.
+      void this.#timerTick().catch(err => {
+        this.#logger.warn('[CD] #timerTick unhandled error', {
+          error: (err as any)?.message ?? String(err),
+        });
+      });
     }, interval);
   }
 
@@ -223,9 +248,14 @@ export class ClientDispatcher {
       const name = (err as any)?.name;
       this.#logger.warn(`[CD] timer dispatch failed: ${name ?? 'Error'}: ${msg}`, { error: msg, stack });
     } finally {
-      this.#inFlight = false;
-      this.#props.onDispatching(false);
-      this.#props.clientReceiver.resume();
+      // Only mutate shared state if this tick still owns the current epoch.
+      // A stop() → start() cycle may have launched a new #doStart whose
+      // pause/inFlight state we must not clobber.
+      if (epoch === this.#epoch) {
+        this.#inFlight = false;
+        this.#props.onDispatching(false);
+        this.#props.clientReceiver.resume();
+      }
     }
 
     // Post-finally

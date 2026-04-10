@@ -13,6 +13,7 @@ import {
   E2E_STRESS_MAX_RECORDS,
   TEST_DURATION_MS,
   SERVER_RESTART_AT_MS,
+  STAGGER_CONNECT_MS,
 } from './config';
 import { clear as clearRecordsOfTruth } from './recordsOfTruth';
 import { createStressFinalReporter } from './stressFinalReport';
@@ -44,7 +45,15 @@ describe('client sync integration', () => {
     clearRecordsOfTruth();
 
     clients = Array.from({ length: NUM_CLIENTS }, (_, i) => useClient(`${i}`));
-    await Promise.all(clients.map(c => c.connect()));
+    // Stagger connections over STAGGER_CONNECT_MS so clients don't all hit the
+    // server at once — mirrors real-world staggered user arrivals.
+    await Promise.all(clients.map(async (c, i) => {
+      const delay = clients.length > 1
+        ? Math.floor((i / (clients.length - 1)) * STAGGER_CONNECT_MS)
+        : 0;
+      await new Promise(r => setTimeout(r, delay));
+      await c.connect();
+    }));
   }, 90_000);
 
   afterAll(async () => {

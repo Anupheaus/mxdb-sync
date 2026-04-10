@@ -173,9 +173,21 @@ export async function setupE2E(options?: SetupE2EOptions): Promise<void> {
   runLogger.log('server_start', { port: lifecycle.port });
 
   const onUnhandledRejection = (reason: unknown) => {
+    const msg = String((reason as { message?: string })?.message ?? reason);
+    // Socket.io's _clearAcks fires synchronous rejections for all pending
+    // emitWithAck calls when the transport closes (e.g. mid-test server
+    // SIGKILL). The CD already catches these in its try/catch, but the
+    // socket.io library creates a second rejection on the same Error from
+    // inside the close-event handler before the microtask queue runs the
+    // caller's .then chain. These are harmless — the sync engine retries
+    // on reconnect — so swallow them instead of letting Vitest report them.
+    if (/socket has been disconnected|transport close/i.test(msg)) {
+      runLogger.log('suppressed_rejection', { reason: msg });
+      return;
+    }
     runLogger.log('error', {
       type: 'unhandledRejection',
-      reason: String((reason as { message?: string })?.message ?? reason),
+      reason: msg,
     });
   };
   const onUncaughtException = (error: Error) => {

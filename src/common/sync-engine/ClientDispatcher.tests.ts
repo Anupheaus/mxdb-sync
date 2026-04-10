@@ -434,6 +434,347 @@ describe('ClientDispatcher', () => {
     expect(updateArg[0].records?.[0].lastAuditEntryId).toBe('aaa-low-client-update');
   });
 
+  describe('communication error retry', () => {
+    it('retries onStart dispatch after a communication error (e.g. socket disconnected)', async () => {
+      const cr = makeCR();
+      const record = makeRecord('r1', 'Alice');
+      const audit = auditor.createAuditFrom(record);
+
+      const onStart = vi.fn().mockReturnValue([{
+        collectionName: 'items',
+        records: [{ record, audit: audit.entries }],
+      }]);
+
+      // First call rejects (simulating socket disconnection), second succeeds
+      const onDispatch = vi.fn()
+        .mockRejectedValueOnce(new Error('socket has been disconnected'))
+        .mockResolvedValueOnce([{
+          collectionName: 'items',
+          successfulRecordIds: ['r1'],
+        }]);
+
+      const onUpdate = vi.fn();
+
+      const cd = new ClientDispatcher(mockLogger, {
+        clientReceiver: cr,
+        onPayloadRequest: vi.fn().mockReturnValue([]),
+        onDispatching: vi.fn(),
+        onDispatch,
+        onUpdate,
+        onStart,
+        timerInterval: 50,
+      });
+
+      cd.start();
+      // First attempt fires and fails
+      await vi.advanceTimersByTimeAsync(0);
+      expect(onDispatch).toHaveBeenCalledOnce();
+      expect(onUpdate).not.toHaveBeenCalled();
+
+      // Retry fires after timerInterval
+      await vi.advanceTimersByTimeAsync(50);
+      expect(onDispatch).toHaveBeenCalledTimes(2);
+      expect(onUpdate).toHaveBeenCalledOnce();
+
+      cd.stop();
+    });
+
+    it('retries timer-based dispatch after a communication error', async () => {
+      const cr = makeCR();
+      const record = makeRecord('r1', 'Alice');
+      const audit = auditor.createAuditFrom(record);
+
+      const onPayloadRequest = vi.fn().mockReturnValue([{
+        collectionName: 'items',
+        records: [{ record, audit: audit.entries }],
+      }]);
+
+      // onStart succeeds (empty), then timer dispatch fails once, then succeeds
+      const onDispatch = vi.fn()
+        .mockResolvedValueOnce([]) // onStart — no records
+        .mockRejectedValueOnce(new Error('transport close'))
+        .mockResolvedValueOnce([{
+          collectionName: 'items',
+          successfulRecordIds: ['r1'],
+        }]);
+
+      const onUpdate = vi.fn();
+
+      const cd = new ClientDispatcher(mockLogger, {
+        clientReceiver: cr,
+        onPayloadRequest,
+        onDispatching: vi.fn(),
+        onDispatch,
+        onUpdate,
+        onStart: vi.fn().mockReturnValue([]),
+        timerInterval: 50,
+      });
+
+      cd.start();
+      await vi.runAllTimersAsync(); // onStart completes
+
+      // Enqueue a record — will fire a timer tick
+      cd.enqueue({ collectionName: 'items', recordId: 'r1' });
+
+      // First timer tick — dispatch fails
+      await vi.advanceTimersByTimeAsync(50);
+      expect(onDispatch).toHaveBeenCalledTimes(2); // onStart + failed tick
+      expect(onUpdate).not.toHaveBeenCalled();
+
+      // Retry timer tick — dispatch succeeds
+      await vi.advanceTimersByTimeAsync(50);
+      expect(onDispatch).toHaveBeenCalledTimes(3);
+      expect(onUpdate).toHaveBeenCalledOnce();
+
+      cd.stop();
+    });
+
+    it('retries multiple times until dispatch succeeds', async () => {
+      const cr = makeCR();
+      const record = makeRecord('r1', 'Alice');
+      const audit = auditor.createAuditFrom(record);
+
+      const onStart = vi.fn().mockReturnValue([{
+        collectionName: 'items',
+        records: [{ record, audit: audit.entries }],
+      }]);
+
+      // Fail 3 times, then succeed
+      const onDispatch = vi.fn()
+        .mockRejectedValueOnce(new Error('socket has been disconnected'))
+        .mockRejectedValueOnce(new Error('transport close'))
+        .mockRejectedValueOnce(new Error('timeout'))
+        .mockResolvedValueOnce([{
+          collectionName: 'items',
+          successfulRecordIds: ['r1'],
+        }]);
+
+      const onUpdate = vi.fn();
+
+      const cd = new ClientDispatcher(mockLogger, {
+        clientReceiver: cr,
+        onPayloadRequest: vi.fn().mockReturnValue([]),
+        onDispatching: vi.fn(),
+        onDispatch,
+        onUpdate,
+        onStart,
+        timerInterval: 50,
+      });
+
+      cd.start();
+
+      // Attempt 1 fails
+      await vi.advanceTimersByTimeAsync(0);
+      expect(onDispatch).toHaveBeenCalledTimes(1);
+
+      // Attempt 2 fails
+      await vi.advanceTimersByTimeAsync(50);
+      expect(onDispatch).toHaveBeenCalledTimes(2);
+
+      // Attempt 3 fails
+      await vi.advanceTimersByTimeAsync(50);
+      expect(onDispatch).toHaveBeenCalledTimes(3);
+
+      // Attempt 4 succeeds
+      await vi.advanceTimersByTimeAsync(50);
+      expect(onDispatch).toHaveBeenCalledTimes(4);
+      expect(onUpdate).toHaveBeenCalledOnce();
+
+      cd.stop();
+    });
+
+    it('does not retry after stop() is called during a failed dispatch', async () => {
+      const cr = makeCR();
+      const record = makeRecord('r1', 'Alice');
+      const audit = auditor.createAuditFrom(record);
+
+      let rejectDispatch: (err: Error) => void;
+      const onDispatch = vi.fn().mockImplementation(() =>
+        new Promise<MXDBSyncEngineResponse>((_resolve, reject) => { rejectDispatch = reject; }),
+      );
+
+      const onStart = vi.fn().mockReturnValue([{
+        collectionName: 'items',
+        records: [{ record, audit: audit.entries }],
+      }]);
+
+      const cd = new ClientDispatcher(mockLogger, {
+        clientReceiver: cr,
+        onPayloadRequest: vi.fn().mockReturnValue([]),
+        onDispatching: vi.fn(),
+        onDispatch,
+        onUpdate: vi.fn(),
+        onStart,
+        timerInterval: 50,
+      });
+
+      cd.start();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(onDispatch).toHaveBeenCalledOnce();
+
+      // Stop while dispatch is in-flight, then let it fail
+      cd.stop();
+      rejectDispatch!(new Error('socket has been disconnected'));
+      await vi.runAllTimersAsync();
+
+      // No retry — stop() killed the epoch
+      expect(onDispatch).toHaveBeenCalledOnce();
+    });
+
+    it('catches errors thrown by onDispatch without surfacing unhandled rejections', async () => {
+      const cr = makeCR();
+      const record = makeRecord('r1', 'Alice');
+      const audit = auditor.createAuditFrom(record);
+
+      const onStart = vi.fn().mockReturnValue([{
+        collectionName: 'items',
+        records: [{ record, audit: audit.entries }],
+      }]);
+
+      // Reject with a non-standard error shape (e.g. socket.io internal error)
+      const onDispatch = vi.fn()
+        .mockRejectedValueOnce({ message: 'socket has been disconnected', name: 'Error' })
+        .mockResolvedValueOnce([{
+          collectionName: 'items',
+          successfulRecordIds: ['r1'],
+        }]);
+
+      const cd = new ClientDispatcher(mockLogger, {
+        clientReceiver: cr,
+        onPayloadRequest: vi.fn().mockReturnValue([]),
+        onDispatching: vi.fn(),
+        onDispatch,
+        onUpdate: vi.fn(),
+        onStart,
+        timerInterval: 50,
+      });
+
+      // Should not throw — errors are caught and logged
+      cd.start();
+      await vi.advanceTimersByTimeAsync(0);
+      await vi.advanceTimersByTimeAsync(50);
+
+      expect(onDispatch).toHaveBeenCalledTimes(2);
+      expect(mockLogger.warn).toHaveBeenCalled();
+
+      cd.stop();
+    });
+
+    it('stop() → start() while old #doStart dispatch is in-flight does not clobber new coroutine state', async () => {
+      // Race: old #doStart is awaiting onDispatch. stop() → start() launches a
+      // new #doStart. When the old onDispatch resolves, its finally block must
+      // NOT reset #inFlight or call resume() — those belong to the new coroutine.
+      const cr = makeCR();
+      const record = makeRecord('r1', 'Alice');
+      const audit = auditor.createAuditFrom(record);
+
+      let resolveOldDispatch: (v: MXDBSyncEngineResponse) => void;
+      let dispatchCallCount = 0;
+      const onDispatch = vi.fn().mockImplementation(() => {
+        dispatchCallCount++;
+        if (dispatchCallCount === 1) {
+          // First dispatch (old coroutine) — hold it pending
+          return new Promise<MXDBSyncEngineResponse>(resolve => { resolveOldDispatch = resolve; });
+        }
+        // Second dispatch (new coroutine) — also hold pending so we can inspect state
+        return new Promise<MXDBSyncEngineResponse>(() => { /* never resolves during test */ });
+      });
+
+      const onDispatching = vi.fn();
+      const onStart = vi.fn().mockReturnValue([{
+        collectionName: 'items',
+        records: [{ record, audit: audit.entries }],
+      }]);
+
+      const cd = new ClientDispatcher(mockLogger, {
+        clientReceiver: cr,
+        onPayloadRequest: vi.fn().mockReturnValue([]),
+        onDispatching,
+        onDispatch,
+        onUpdate: vi.fn(),
+        onStart,
+        timerInterval: 50,
+      });
+
+      // Start first coroutine — it calls onDispatch and blocks
+      cd.start();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(onDispatch).toHaveBeenCalledOnce();
+      expect(onDispatching).toHaveBeenLastCalledWith(true);
+
+      // stop() → start() while old dispatch is pending
+      cd.stop();
+      // stop() should have called onDispatching(false) since it was in-flight
+      expect(onDispatching).toHaveBeenCalledWith(false);
+
+      onDispatching.mockClear();
+      cd.start();
+      await vi.advanceTimersByTimeAsync(0);
+      // New coroutine should have called onDispatching(true)
+      expect(onDispatching).toHaveBeenCalledWith(true);
+
+      // Now resolve the OLD dispatch — its finally block must NOT call onDispatching(false)
+      onDispatching.mockClear();
+      resolveOldDispatch!([{ collectionName: 'items', successfulRecordIds: ['r1'] }]);
+      await vi.advanceTimersByTimeAsync(0);
+
+      // onDispatching should NOT have been called by the old coroutine
+      expect(onDispatching).not.toHaveBeenCalled();
+
+      cd.stop();
+    });
+
+    it('re-gathers payload state on retry (not stale snapshot)', async () => {
+      const cr = makeCR();
+      const recordV1 = makeRecord('r1', 'Alice');
+      const recordV2 = makeRecord('r1', 'AliceUpdated');
+      const auditV1 = auditor.createAuditFrom(recordV1);
+      const auditV2 = auditor.createAuditFrom(recordV2);
+
+      // onStart returns v1 first time, v2 second time (simulating local edit during retry delay)
+      const onStart = vi.fn()
+        .mockReturnValueOnce([{
+          collectionName: 'items',
+          records: [{ record: recordV1, audit: auditV1.entries }],
+        }])
+        .mockReturnValueOnce([{
+          collectionName: 'items',
+          records: [{ record: recordV2, audit: auditV2.entries }],
+        }]);
+
+      const dispatched: any[] = [];
+      const onDispatch = vi.fn()
+        .mockImplementationOnce(async (req: any) => {
+          dispatched.push(JSON.parse(JSON.stringify(req)));
+          throw new Error('socket has been disconnected');
+        })
+        .mockImplementationOnce(async (req: any) => {
+          dispatched.push(JSON.parse(JSON.stringify(req)));
+          return [{ collectionName: 'items', successfulRecordIds: ['r1'] }];
+        });
+
+      const cd = new ClientDispatcher(mockLogger, {
+        clientReceiver: cr,
+        onPayloadRequest: vi.fn().mockReturnValue([]),
+        onDispatching: vi.fn(),
+        onDispatch,
+        onUpdate: vi.fn(),
+        onStart,
+        timerInterval: 50,
+      });
+
+      cd.start();
+      await vi.advanceTimersByTimeAsync(0);
+      await vi.advanceTimersByTimeAsync(50);
+
+      expect(onStart).toHaveBeenCalledTimes(2);
+      // The retry re-called onStart() to get fresh state
+      expect(dispatched).toHaveLength(2);
+
+      cd.stop();
+    });
+  });
+
   it('onDispatching is called true/false around dispatch', async () => {
     const cr = makeCR();
     const onDispatching = vi.fn();

@@ -378,7 +378,13 @@ export function merge<T extends MXDBRecord>(
 export function collapseToAnchor<T extends MXDBRecord>(audit: AnyAuditOf<T>, lastSyncedEntryId: string): AnyAuditOf<T> {
   const list = entriesOf(audit);
   const idx = list.findIndex(e => e.id === lastSyncedEntryId);
-  const pendingEntries = idx >= 0 ? list.slice(idx + 1) : [];
+  // When anchor is found, keep everything after it. When not found (e.g. the
+  // anchor came from the server and was never in our local entries), keep all
+  // non-Branched entries whose ULID is greater than the anchor — those are
+  // pending mutations the server hasn't seen yet.
+  const pendingEntries = idx >= 0
+    ? list.slice(idx + 1)
+    : list.filter(e => e.type !== AuditEntryType.Branched && e.id > lastSyncedEntryId);
 
   const branch: AuditBranchedEntry = {
     type: AuditEntryType.Branched,

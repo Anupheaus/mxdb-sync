@@ -11,7 +11,7 @@ export const Registration = createComponent('Registration', () => {
     const res = await fetch('/api/create-invite');
     const { url } = await res.json() as { url: string; };
     try {
-      await invite(url, { appName: 'MXDB Sync Test' });
+      await invite(url, { displayName: 'MXDB Sync Test' });
     } catch (innerError) {
       setError(new Error({ error: innerError }));
     }

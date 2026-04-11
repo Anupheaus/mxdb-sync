@@ -16,7 +16,7 @@ import type { ServerDb } from '../providers';
  * Stores a new `mxdb_authentication` record with `requestId` (ULID) and `userId`.
  * The returned URL is for the app to distribute (email, WhatsApp, etc.).
  */
-export async function createInviteLink(db: ServerDb, userId: string, domain: string, socketName: string): Promise<string> {
+export async function createInviteLink(db: ServerDb, userId: string, domain: string, _socketName: string): Promise<string> {
   const requestId = ulid();
   const authColl = new AuthCollection(db);
   await authColl.create({
@@ -25,10 +25,9 @@ export async function createInviteLink(db: ServerDb, userId: string, domain: str
     isEnabled: true,
     // createdAt: Date.now(),
   });
-  // Point at the REST invite endpoint (registerAuthInviteRoute). A bare `/?requestId=` would hit
-  // the host app’s SPA / catch-all (e.g. koa-pug index) and return HTML instead of JSON.
-  const path = `/${encodeURIComponent(socketName)}/register?requestId=${requestId}`;
-  return `https://${domain}${path}`;
+  // Point at the SPA root with requestId as a query param. The client-side invite hook
+  // (useMXDBInvite) will detect the param and make the fetch to /{socketName}/register internally.
+  return `https://${domain}/?requestId=${requestId}`;
 }
 
 /**

@@ -8,9 +8,10 @@
  */
 import { createComponent } from '@anupheaus/react-ui';
 import type { ReactNode } from 'react';
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useContext } from 'react';
 import { useDb } from '../providers/dbs';
 import { SocketProvider } from './SocketProvider';
+import { AuthContext } from './AuthContext';
 import type { MXDBCollection, MXDBError } from '../../common';
 
 interface Props {
@@ -32,19 +33,33 @@ export const TokenProvider = createComponent('TokenProvider', ({
   children,
 }: Props) => {
   const { db } = useDb();
+  const { signOut } = useContext(AuthContext);
   // connectionToken is fixed for this session — changing it would reconnect the socket.
   const [connectionToken, setConnectionToken] = useState<string | undefined>();
   const [keyHash, setKeyHash] = useState<string | undefined>();
 
   useEffect(() => {
     (async () => {
-      let auth = await db.readAuth();
-      if (auth == null && initialAuth != null) {
-        await db.writeAuth(initialAuth.token, initialAuth.keyHash);
-        auth = initialAuth;
+      try {
+        let auth = await db.readAuth();
+        if (auth == null && initialAuth != null) {
+          await db.writeAuth(initialAuth.token, initialAuth.keyHash);
+          auth = initialAuth;
+        }
+        if (auth == null) {
+          // Returning user with no auth token — SQLite was not persisted (e.g. first session
+          // had an OPFS write failure). Sign out so the app returns to its unauthenticated state
+          // and the user can re-authenticate.
+          onError?.({ code: 'AUTH_MISSING', message: 'Authentication data not found. Please sign in again.', severity: 'fatal', originalError: undefined });
+          signOut();
+          return;
+        }
+        setConnectionToken(auth.token);
+        setKeyHash(auth.keyHash);
+      } catch (err) {
+        onError?.({ code: 'AUTH_MISSING', message: err instanceof Error ? err.message : 'Failed to read authentication data.', severity: 'fatal', originalError: err });
+        signOut();
       }
-      setConnectionToken(auth?.token);
-      setKeyHash(auth?.keyHash);
     })();
   }, [db]);
 

@@ -68,6 +68,7 @@ export type MXDBErrorSeverity = 'warning' | 'error' | 'fatal';
 
 export type MXDBErrorCode =
   | 'SYNC_FAILED'
+  | 'AUTH_MISSING'
   | 'AUTH_REJECTED'
   | 'ENCRYPTION_FAILED'
   | 'COLLECTION_NOT_FOUND'

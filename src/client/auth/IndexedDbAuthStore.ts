@@ -2,14 +2,14 @@
  * §4.3 / §4.4 — IndexedDB auth store.
  *
  * Stores one record per registered device:
- *   { id, credentialId, dbName, token, isDefault }
+ *   { id, credentialId, dbName, isDefault }
  *
- * `dbName`     — random filename used for this user's SQLite DB in OPFS.
+ * `dbName`       — random filename used for this user's SQLite DB in OPFS.
  * `credentialId` — raw WebAuthn credential ID bytes (for PRF key derivation).
- * `token`      — current ULID auth token (mirrors SQLite mxdb_authentication).
- * `isDefault`  — true for the user that should be loaded on next app start.
+ * `isDefault`    — true for the user that should be loaded on next app start.
  *
- * All methods are no-ops when IndexedDB is unavailable (Node / test environments).
+ * The auth token and keyHash are stored exclusively in the encrypted SQLite DB,
+ * never in IndexedDB.
  */
 
 const IDB_STORE = 'mxdb_authentication';
@@ -19,14 +19,6 @@ export interface MXDBAuthEntry {
   credentialId: Uint8Array;
   /** Random filename for this user's SQLite DB (no extension). */
   dbName: string;
-  /** Current ULID auth token — kept in sync with SQLite mxdb_authentication. */
-  token: string;
-  /**
-   * SHA-256 hex digest of the WebAuthn-derived encryption key for this device.
-   * Sent in the socket handshake so the server can disable the device if an
-   * invalid token is presented (e.g. after a replay attack).
-   */
-  keyHash: string;
   isDefault: boolean;
 }
 
@@ -75,7 +67,6 @@ export class IndexedDbAuthStore {
 
   /**
    * Saves a new entry as the default, clearing `isDefault` on all others.
-   * Generates a random `id` if not supplied.
    */
   static async save(appName: string, entry: MXDBAuthEntry): Promise<void> {
     if (!isIndexedDbAvailable()) return;
@@ -89,23 +80,6 @@ export class IndexedDbAuthStore {
           if (existing.isDefault) store.put({ ...existing, isDefault: false });
         }
         store.put({ ...entry, isDefault: true });
-      };
-      tx.oncomplete = () => { db.close(); resolve(); };
-      tx.onerror = () => { db.close(); reject(tx.error); };
-    });
-  }
-
-  /** Updates the token on the default entry. */
-  static async updateDefaultToken(appName: string, token: string): Promise<void> {
-    if (!isIndexedDbAvailable()) return;
-    const db = await openIdb(appName);
-    return new Promise((resolve, reject) => {
-      const tx = db.transaction(IDB_STORE, 'readwrite');
-      const store = tx.objectStore(IDB_STORE);
-      const getAllReq = store.getAll();
-      getAllReq.onsuccess = () => {
-        const defaultEntry = (getAllReq.result as MXDBAuthEntry[]).find(e => e.isDefault);
-        if (defaultEntry != null) store.put({ ...defaultEntry, token });
       };
       tx.oncomplete = () => { db.close(); resolve(); };
       tx.onerror = () => { db.close(); reject(tx.error); };

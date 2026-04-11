@@ -192,14 +192,14 @@ export const AuthProvider = createComponent('AuthProvider', ({
   // ── register: full invite flow ────────────────────────────────────────────
   const register = useCallback(async (
     url: string,
-    _options?: RegisterOptions,
+    options?: RegisterOptions,
   ): Promise<{ userDetails: MXDBUserDetails }> => {
     const requestId = extractRequestId(url);
     if (requestId == null) throw new Error('Invalid invite URL: missing requestId parameter.');
 
     const { userDetails, registrationToken } = await fetchInitialRegistration(appName, requestId);
     const newDbName = generateDbName();
-    const { credentialId, prfOutput } = await createWebAuthnCredential(userDetails, appName);
+    const { credentialId, prfOutput } = await createWebAuthnCredential(userDetails, options?.appName ?? appName);
     const encKey = await deriveKeyFromPrfOutput(prfOutput);
     const keyHash = await computeKeyHash(encKey);
     const deviceDetails = collectDeviceDetails();

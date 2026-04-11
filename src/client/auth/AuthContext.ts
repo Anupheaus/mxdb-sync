@@ -2,6 +2,8 @@ import { createContext } from 'react';
 import type { MXDBUserDetails } from '../../common/models';
 
 export interface RegisterOptions {
+  /** Override the WebAuthn relying-party name shown during credential creation. */
+  appName?: string;
   /** Optional display name override (defaults to name from server invitation). */
   displayName?: string;
 }

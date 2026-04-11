@@ -103,8 +103,8 @@ function broadcastChange(senderPortId: string, collectionName: string) {
 
 // ─── REGEXP custom function ───────────────────────────────────────────────────
 
-function registerRegexp(s3: Sqlite3, database: OO1Db) {
-  (s3 as any).createFunction(database, 'regexp', (_ctx: unknown, pattern: string, value: string) => {
+function registerRegexp(_s3: Sqlite3, database: OO1Db) {
+  (database as any).createFunction('regexp', (_ctx: unknown, pattern: string, value: string) => {
     try {
       return new RegExp(pattern).test(value) ? 1 : 0;
     } catch {
@@ -142,13 +142,11 @@ async function flushEncrypted(s3: Sqlite3, database: OO1Db): Promise<void> {
   out.set(new Uint8Array(ciphertext), 12);
   const root = await (navigator.storage as any).getDirectory();
   const fh = await root.getFileHandle(encryptedFileName, { create: true });
-  const sah = await (fh as any).createSyncAccessHandle();
+  const writable = await (fh as any).createWritable({ keepExistingData: false });
   try {
-    sah.truncate(0);
-    sah.write(out, { at: 0 });
-    sah.flush();
+    await writable.write(out);
   } finally {
-    sah.close();
+    await writable.close();
   }
 }
 

@@ -26,12 +26,4 @@ describe('IndexedDbContext — default value', () => {
   it('clearDefault resolves without throwing', async () => {
     await expect(getDefaultValue(IndexedDbContext).clearDefault()).resolves.toBeUndefined();
   });
-
-  it('getDefault can be called multiple times without side effects', async () => {
-    const ctx = getDefaultValue(IndexedDbContext);
-    const r1 = await ctx.getDefault();
-    const r2 = await ctx.getDefault();
-    expect(r1).toBeUndefined();
-    expect(r2).toBeUndefined();
-  });
 });

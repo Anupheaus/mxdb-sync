@@ -127,6 +127,21 @@ describe('IndexedDbAuthStore — when IndexedDB is available (fake-indexeddb)', 
     const def = await IndexedDbAuthStore.getDefault(appName);
     expect(def).toBeUndefined();
   });
+
+  it('save forces isDefault: true even when entry has isDefault: false', async () => {
+    const entry: MXDBAuthEntry = {
+      id: 'force-id',
+      credentialId: new Uint8Array([9, 8, 7]),
+      dbName: 'force-db',
+      isDefault: false, // caller passes false
+    };
+    await IndexedDbAuthStore.save(appName, entry);
+    const result = await IndexedDbAuthStore.getDefault(appName);
+    // save() must always set isDefault: true regardless of input
+    expect(result).toBeDefined();
+    expect(result!.id).toBe('force-id');
+    expect(result!.isDefault).toBe(true);
+  });
 });
 
 describe('MXDBAuthEntry type shape', () => {

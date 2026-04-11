@@ -199,7 +199,7 @@ export const AuthProvider = createComponent('AuthProvider', ({
 
     const { userDetails, registrationToken } = await fetchInitialRegistration(appName, requestId);
     const newDbName = generateDbName();
-    const { credentialId, prfOutput } = await createWebAuthnCredential(userDetails, undefined);
+    const { credentialId, prfOutput } = await createWebAuthnCredential(userDetails, appName);
     const encKey = await deriveKeyFromPrfOutput(prfOutput);
     const keyHash = await computeKeyHash(encKey);
     const deviceDetails = collectDeviceDetails();

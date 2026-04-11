@@ -3,7 +3,7 @@ import type { ClientToServerSynchronisation } from './ClientToServerSynchronisat
 
 export const ClientToServerSyncInstanceContext = createContext<ClientToServerSynchronisation | null>(null);
 
-/** Access the ClientToServerSynchronisation instance (constructed in IndexedDbBridge). */
+/** Access the ClientToServerSynchronisation instance (constructed in IndexedDbProvider). */
 export function useClientToServerSyncInstance(): ClientToServerSynchronisation | null {
   return useContext(ClientToServerSyncInstanceContext);
 }

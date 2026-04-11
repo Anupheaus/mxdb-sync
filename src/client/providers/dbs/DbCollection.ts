@@ -3,7 +3,7 @@ import { bind, is } from '@anupheaus/common';
 import { serialise, deserialise } from './transforms';
 import type { DistinctProps, DistinctResults, MXDBCollectionConfig, QueryResults } from '../../../common/models';
 import type { MXDBCollectionEvent } from './models';
-import { AUDIT_TABLE_SUFFIX, LIVE_TABLE_SUFFIX } from './dbs-consts';
+import { AUDIT_TABLE_SUFFIX, LIVE_TABLE_SUFFIX, q } from './dbs-consts';
 import { auditor } from '../../../common';
 import type { AuditEntry, AuditOf } from '../../../common';
 import { AuditEntryType } from '../../../common';
@@ -390,7 +390,7 @@ export class DbCollection<RecordType extends Record = Record> {
 
     const { where, params } = filtersToSql<RecordType>(filters);
     const orderBy = sortsToSql<RecordType>(sorts);
-    const liveTable = `${this.#name}${LIVE_TABLE_SUFFIX}`;
+    const liveTable = q(`${this.#name}${LIVE_TABLE_SUFFIX}`);
 
     // Count total (no pagination)
     const countSql = `SELECT COUNT(*) as cnt FROM ${liveTable}${where ? ` WHERE ${where}` : ''}`;
@@ -418,7 +418,7 @@ export class DbCollection<RecordType extends Record = Record> {
 
     const { where, params } = filtersToSql<RecordType>(filters);
     const orderBy = sortsToSql<RecordType>(sorts);
-    const liveTable = `${this.#name}${LIVE_TABLE_SUFFIX}`;
+    const liveTable = q(`${this.#name}${LIVE_TABLE_SUFFIX}`);
     const fieldExpr = `json_extract(data, '$.${String(field)}')`;
 
     let sql = `SELECT DISTINCT ${fieldExpr} as v FROM ${liveTable}${where ? ` WHERE ${where}` : ''}`;
@@ -504,13 +504,13 @@ export class DbCollection<RecordType extends Record = Record> {
   // ─── Private: load from SQLite on startup ────────────────────────────────
 
   async #loadData() {
-    const liveTable = `${this.#name}${LIVE_TABLE_SUFFIX}`;
+    const liveTable = q(`${this.#name}${LIVE_TABLE_SUFFIX}`);
 
     // Load live records
     const liveRows = await this.#worker.query<LiveRow>(`SELECT id, data FROM ${liveTable}`);
     this.#records = new Map(liveRows.map(row => [row.id, deserialise(JSON.parse(row.data)) as RecordType]));
 
-    const auditTable = `${this.#name}${AUDIT_TABLE_SUFFIX}`;
+    const auditTable = q(`${this.#name}${AUDIT_TABLE_SUFFIX}`);
     const auditRows = await this.#worker.query<AuditRow>(`SELECT id, recordId, type, timestamp, record, ops FROM ${auditTable} ORDER BY recordId, id`);
     const grouped = new Map<string, AuditRow[]>();
     for (const row of auditRows) {
@@ -526,7 +526,7 @@ export class DbCollection<RecordType extends Record = Record> {
 
   async #persist(records: RecordType[], auditRecords: AuditOf<RecordType>[]): Promise<void> {
     const liveStmts = records.map(record => ({
-      sql: `INSERT OR REPLACE INTO ${this.#name}${LIVE_TABLE_SUFFIX}(id, data) VALUES (?, ?)`,
+      sql: `INSERT OR REPLACE INTO ${q(`${this.#name}${LIVE_TABLE_SUFFIX}`)}(id, data) VALUES (?, ?)`,
       params: [record.id, JSON.stringify(serialise(record))],
     }));
     const auditStmts = auditRecords.flatMap(audit => this.#auditToInsertStatements(audit));
@@ -544,7 +544,7 @@ export class DbCollection<RecordType extends Record = Record> {
 
   /** Convert AuditOf → DELETE old rows + INSERT each audit entry row (transactional). */
   #auditToInsertStatements(audit: AuditOf<RecordType>): Array<{ sql: string; params: unknown[]; }> {
-    const auditTable = `${this.#name}${AUDIT_TABLE_SUFFIX}`;
+    const auditTable = q(`${this.#name}${AUDIT_TABLE_SUFFIX}`);
     const stmts: Array<{ sql: string; params: unknown[]; }> = [
       { sql: `DELETE FROM ${auditTable} WHERE recordId = ?`, params: [audit.id] },
     ];
@@ -561,7 +561,7 @@ export class DbCollection<RecordType extends Record = Record> {
   async #deleteLiveRowsOnly(ids: string[]): Promise<void> {
     if (ids.length === 0) return;
     const placeholders = ids.map(() => '?').join(', ');
-    const liveTable = `${this.#name}${LIVE_TABLE_SUFFIX}`;
+    const liveTable = q(`${this.#name}${LIVE_TABLE_SUFFIX}`);
     await this.#worker.execBatch(
       [{ sql: `DELETE FROM ${liveTable} WHERE id IN (${placeholders})`, params: ids }],
       this.#name,
@@ -571,7 +571,7 @@ export class DbCollection<RecordType extends Record = Record> {
   async #deleteAuditRowsOnly(ids: string[]): Promise<void> {
     if (ids.length === 0) return;
     const placeholders = ids.map(() => '?').join(', ');
-    const auditTable = `${this.#name}${AUDIT_TABLE_SUFFIX}`;
+    const auditTable = q(`${this.#name}${AUDIT_TABLE_SUFFIX}`);
     await this.#worker.execBatch(
       [{ sql: `DELETE FROM ${auditTable} WHERE recordId IN (${placeholders})`, params: ids }],
       this.#name,
@@ -581,13 +581,13 @@ export class DbCollection<RecordType extends Record = Record> {
   async #deleteRecords(ids: string[], removeAudit = false): Promise<void> {
     if (ids.length === 0) return;
     const placeholders = ids.map(() => '?').join(', ');
-    const liveTable = `${this.#name}${LIVE_TABLE_SUFFIX}`;
+    const liveTable = q(`${this.#name}${LIVE_TABLE_SUFFIX}`);
     const stmts: Array<{ sql: string; params: unknown[]; }> = [
       { sql: `DELETE FROM ${liveTable} WHERE id IN (${placeholders})`, params: ids },
     ];
     if (removeAudit) {
       stmts.push({
-        sql: `DELETE FROM ${this.#name}${AUDIT_TABLE_SUFFIX} WHERE recordId IN (${placeholders})`,
+        sql: `DELETE FROM ${q(`${this.#name}${AUDIT_TABLE_SUFFIX}`)} WHERE recordId IN (${placeholders})`,
         params: ids,
       });
     } else {
@@ -599,8 +599,8 @@ export class DbCollection<RecordType extends Record = Record> {
 
   async #clearAll(): Promise<void> {
     await this.#worker.execBatch([
-      { sql: `DELETE FROM ${this.#name}${LIVE_TABLE_SUFFIX}` },
-      { sql: `DELETE FROM ${this.#name}${AUDIT_TABLE_SUFFIX}` },
+      { sql: `DELETE FROM ${q(`${this.#name}${LIVE_TABLE_SUFFIX}`)}` },
+      { sql: `DELETE FROM ${q(`${this.#name}${AUDIT_TABLE_SUFFIX}`)}` },
     ], this.#name);
   }
 }

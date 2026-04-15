@@ -13,6 +13,7 @@ import { useState, useEffect, useCallback, useContext, useMemo, useRef } from 'r
 import { ulid } from 'ulidx';
 import { AuthContext } from './AuthContext';
 import type { RegisterOptions } from './AuthContext';
+import { UserIdContext } from './UserIdContext';
 import { IndexedDbContext } from './IndexedDbContext';
 import { deriveEncryptionKey, deriveKeyFromPrfOutput, PRF_SALT } from './deriveEncryptionKey';
 import { DbsProvider } from '../providers/dbs';
@@ -137,11 +138,40 @@ export const AuthProvider = createComponent('AuthProvider', ({
   const [dbName, setDbName] = useState<string | undefined>();
   const [pendingAuth, setPendingAuth] = useState<{ token: string; keyHash: string } | undefined>();
   const [loaded, setLoaded] = useState(false);
+  const [user, setUser] = useState<MXDBUserDetails | undefined>();
+  const signOutActionRef = useRef<(() => void) | undefined>(undefined);
   const channelRef = useRef<BroadcastChannel | null>(null);
 
-  // ── Bootstrap: read IDB → WebAuthn → derive key ──────────────────────────
+  const onRegisterSignOutAction = useCallback((fn: (() => void) | undefined) => {
+    signOutActionRef.current = fn;
+  }, []);
+
+  // ── Bootstrap: dev bypass (non-production only) OR read IDB → WebAuthn → derive key ──
   useEffect(() => {
     (async () => {
+      // Dev bypass: if a token was injected via window.mxdb.setDevAuth(), use it
+      // directly with a fixed encryption key — no WebAuthn required.
+      // This code path is completely eliminated in production builds.
+      if (process.env.NODE_ENV !== 'production') {
+        const devAuthJson = typeof localStorage !== 'undefined'
+          ? localStorage.getItem(`mxdb:dev-auth:${appName}`)
+          : null;
+        if (devAuthJson != null) {
+          try {
+            const { token, keyHash } = JSON.parse(devAuthJson) as { token: string; keyHash: string };
+            logger.info('[dev] Using dev bypass auth token');
+            setDbName(`dev-bypass-${appName}`);
+            setEncryptionKey(new Uint8Array(32).fill(0xde));
+            setPendingAuth({ token, keyHash });
+            setLoaded(true);
+            return;
+          } catch {
+            logger.warn('[dev] Invalid dev auth JSON in localStorage — clearing and falling through to normal auth');
+            localStorage.removeItem(`mxdb:dev-auth:${appName}`);
+          }
+        }
+      }
+
       try {
         const entry = await getDefault();
         if (entry != null) {
@@ -174,6 +204,7 @@ export const AuthProvider = createComponent('AuthProvider', ({
         setEncryptionKey(undefined);
         setDbName(undefined);
         setPendingAuth(undefined);
+        setUser(undefined);
       }
     };
     return () => { channel.close(); channelRef.current = null; };
@@ -183,9 +214,11 @@ export const AuthProvider = createComponent('AuthProvider', ({
   // On page reload, the bootstrap will find the IDB entry and re-derive the key
   // via WebAuthn automatically. signOut only ends the current session.
   const signOut = useCallback(() => {
+    signOutActionRef.current?.();
     setEncryptionKey(undefined);
     setDbName(undefined);
     setPendingAuth(undefined);
+    setUser(undefined);
     channelRef.current?.postMessage({ type: 'signed-out' });
   }, []);
 
@@ -216,27 +249,33 @@ export const AuthProvider = createComponent('AuthProvider', ({
 
   const authContext = useMemo(() => ({
     isAuthenticated: encryptionKey != null,
+    user,
     signOut,
     register,
-  }), [encryptionKey, signOut, register]);
+  }), [encryptionKey, user, signOut, register]);
+
+  const userIdContext = useMemo(() => ({ user, setUser }), [user]);
 
   if (!loaded) return null;
 
   return (
     <AuthContext.Provider value={authContext}>
-      {encryptionKey != null && dbName != null ? (
-        <DbsProvider name={dbName} encryptionKey={encryptionKey} collections={collections} logger={dbsLogger}>
-          <TokenProvider
-            appName={appName}
-            host={host}
-            collections={collections}
-            onError={onError}
-            initialAuth={pendingAuth}
-          >
-            {children}
-          </TokenProvider>
-        </DbsProvider>
-      ) : children}
+      <UserIdContext.Provider value={userIdContext}>
+        {encryptionKey != null && dbName != null ? (
+          <DbsProvider name={dbName} encryptionKey={encryptionKey} collections={collections} logger={dbsLogger}>
+            <TokenProvider
+              appName={appName}
+              host={host}
+              collections={collections}
+              onError={onError}
+              initialAuth={pendingAuth}
+              onRegisterSignOutAction={onRegisterSignOutAction}
+            >
+              {children}
+            </TokenProvider>
+          </DbsProvider>
+        ) : children}
+      </UserIdContext.Provider>
     </AuthContext.Provider>
   );
 });

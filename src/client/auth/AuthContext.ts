@@ -10,12 +10,14 @@ export interface RegisterOptions {
 
 export interface AuthContextValue {
   isAuthenticated: boolean;
+  user: MXDBUserDetails | undefined;
   signOut(): void;
   register(url: string, options?: RegisterOptions): Promise<{ userDetails: MXDBUserDetails }>;
 }
 
 export const AuthContext = createContext<AuthContextValue>({
   isAuthenticated: false,
+  user: undefined,
   signOut: () => { /* no-op outside provider */ },
   register: () => Promise.reject(new Error('AuthProvider not mounted')),
 });

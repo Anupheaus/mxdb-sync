@@ -170,6 +170,8 @@ export async function startAuthenticatedServer({
         addClientWatches(client, collections, s2c);
         await onClientConnected?.(client);
       } catch (error) {
+        logger?.error('[startAuthenticatedServer] onClientConnected error', { error });
+        client.disconnect(true);
         tokenRotationGates.get(client)?.reject();
       }
     },

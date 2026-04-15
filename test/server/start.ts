@@ -44,7 +44,8 @@ async function start() {
       mongoDbUrl,
       privateKey,
       clientLoggingService: () => loggerService,
-      onGetUserDetails: async () => ({
+      onGetUserDetails: async (userId) => ({
+        id: userId,
         name: 'Tony Hales',
         displayName: 'Tony Hales',
       }),

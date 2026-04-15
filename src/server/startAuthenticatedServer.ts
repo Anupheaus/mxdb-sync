@@ -3,25 +3,23 @@ import { setServerToClientSync } from './providers';
 import { seedCollections } from './seeding';
 import { internalActions } from './actions';
 import { startServer as startSocketServer, useSocketAPI, useEvent, useAction } from '@anupheaus/socket-api/server';
-import type { SocketAPIUser } from '@anupheaus/socket-api/server';
 import { internalSubscriptions } from './subscriptions';
 import { addClientWatches, removeClientWatches } from './clientDbWatches';
 import { ServerToClientSynchronisation } from './ServerToClientSynchronisation';
 import { AuthCollection } from './auth/AuthCollection';
 import { TokenRotation } from './auth/TokenRotation';
-import { mxdbTokenRotated } from '../common/internalEvents';
+import { mxdbTokenRotated, mxdbDeviceBlocked, mxdbUserAuthenticated } from '../common/internalEvents';
 import { mxdbServerToClientSyncAction } from '../common/internalActions';
 import type { Socket } from 'socket.io';
 import type { ServerConfig } from './internalModels';
 import { Logger } from '@anupheaus/common';
-
+import { setAuthState, getAuthState, clearAuthState } from './auth/useAuth';
+import { getAuthConfig } from './auth/authConfig';
 
 const tokenRotationGates = new WeakMap<Socket, ReturnType<typeof Promise.createDeferred<void>>>();
 const clientS2CInstances = new WeakMap<Socket, ServerToClientSynchronisation>();
 
-const adminUser: SocketAPIUser = {
-  id: Math.emptyId(),
-};
+const adminUser = { id: Math.emptyId() };
 
 interface Props extends ServerConfig {
   db: ServerDb;
@@ -36,6 +34,8 @@ export async function startAuthenticatedServer({
   subscriptions,
   onClientConnected,
   onClientDisconnected,
+  onConnected,
+  onDisconnected,
   changeStreamDebounceMs,
   ...config
 }: Props) {
@@ -94,19 +94,48 @@ export async function startAuthenticatedServer({
 
           if (record == null || !record.isEnabled) {
             logger!.warn(`Invalid or disabled auth token — rejecting client ${client.id}`);
-            // If token not found at all and keyHash is known, disable the device as a security measure
             if (record == null && keyHash != null) {
               const deviceRecord = await authColl.findByKeyHash(keyHash);
               if (deviceRecord != null) await authColl.update(deviceRecord.requestId, { isEnabled: false });
             }
+            const emitDeviceBlocked = useEvent(mxdbDeviceBlocked);
+            await emitDeviceBlocked(undefined);
             client.disconnect(true);
             tokenRotationGates.get(client)?.reject();
             return;
           }
 
-          // Authenticate the socket-api user context so `getUser()` works in actions
+          // Fetch full user details (id = userId)
+          const { onGetUserDetails } = getAuthConfig();
+          const rawUserDetails = onGetUserDetails != null
+            ? await onGetUserDetails(record.userId)
+            : { id: record.userId, name: record.userId };
+          const userDetails = { ...rawUserDetails, id: record.userId };
+
+          // Emit full user details to the client
+          const emitUserAuthenticated = useEvent(mxdbUserAuthenticated);
+          await emitUserAuthenticated(userDetails);
+
+          // Make the user available to socket-api action/subscription handlers via getUser()
           const { setUser } = useSocketAPI();
           await setUser({ id: record.userId });
+
+          // Build device info
+          const deviceInfo = {
+            requestId: record.requestId,
+            userId: record.userId,
+            deviceDetails: record.deviceDetails,
+            isEnabled: record.isEnabled,
+            lastConnectedAt: record.lastConnectedAt,
+          };
+
+          // Build and register mutable auth state
+          setAuthState(client, {
+            user: userDetails,
+            deviceInfo,
+            socket: client,
+            signedOut: false,
+          });
 
           // Phase 1: generate new token and persist interim state
           const { newToken, completeRotation } = await TokenRotation.rotateBeforeAck(authColl, record, token);
@@ -118,6 +147,9 @@ export async function startAuthenticatedServer({
           // Phase 2: finalise rotation after ack
           await completeRotation();
           await authColl.update(record.requestId, { lastConnectedAt: Date.now() });
+
+          // Notify library consumer
+          await onConnected?.({ user: userDetails, deviceInfo });
         }
         tokenRotationGates.get(client)?.resolve();
 
@@ -143,8 +175,6 @@ export async function startAuthenticatedServer({
     },
 
     onClientDisconnected: async client => {
-      // Reject any handlers that may be waiting on the gate if the client
-      // disconnects before the token rotation ack is received.
       tokenRotationGates.get(client)?.reject();
       removeClientWatches(client);
 
@@ -155,10 +185,18 @@ export async function startAuthenticatedServer({
         clientS2CInstances.delete(client);
       }
 
+      // Notify library consumer (only if this socket was authenticated)
+      const authState = getAuthState(client);
+      if (authState != null) {
+        const reason = authState.signedOut ? 'signedOut' : 'connectionLost';
+        clearAuthState(client);
+        await onDisconnected?.({ user: authState.user, deviceInfo: authState.deviceInfo, reason });
+      }
+
       await onClientDisconnected?.(client);
     },
   });
 
-  logger?.info('[startAuthenticatedServer] startSocketServer returned', { hasApp: app != null });
+  logger?.info('[startAuthenticatedServer] startAuthenticatedServer returned', { hasApp: app != null });
   return { app };
 }

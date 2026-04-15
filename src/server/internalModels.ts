@@ -4,6 +4,7 @@ import type { Server as HttpsServer } from 'https';
 import type { MXDBDeviceInfo, MXDBUserDetails } from '../common/models';
 import type { MXDBCollection } from '../common';
 import type { ServerConfig as StartSocketServerConfig } from '@anupheaus/socket-api/server';
+import type { PromiseMaybe } from '@anupheaus/common';
 import type Koa from 'koa';
 
 export type AnyHttpServer = Http2Server | HttpServer | HttpsServer;
@@ -21,6 +22,14 @@ export interface ServerConfig extends StartSocketServerConfig {
   onGetUserDetails(userId: string): Promise<MXDBUserDetails>;
   /** Invite link TTL in milliseconds. Default: 24 hours (86 400 000). */
   inviteLinkTTLMs?: number;
+  /** Called after a client successfully authenticates. */
+  onConnected?(ctx: { user: MXDBUserDetails; deviceInfo: MXDBDeviceInfo }): PromiseMaybe<void>;
+  /**
+   * Called when an authenticated client disconnects.
+   * `reason` is `'signedOut'` when the client explicitly signed out,
+   * `'connectionLost'` for any other disconnect.
+   */
+  onDisconnected?(ctx: { user: MXDBUserDetails; deviceInfo: MXDBDeviceInfo; reason: 'signedOut' | 'connectionLost' }): PromiseMaybe<void>;
 }
 
 export interface ServerInstance {
@@ -31,4 +40,7 @@ export interface ServerInstance {
   disableDevice(requestId: string): Promise<void>;
   /** Cleanly close the MongoClient — call from SIGTERM/SIGINT handlers to release in-flight transaction locks. */
   close(): Promise<void>;
+  /** Dev-only: creates a bypass auth token for the given userId without WebAuthn.
+   *  Only populated when NODE_ENV !== 'production'. */
+  createDevToken?(userId: string): Promise<{ token: string; keyHash: string }>;
 }

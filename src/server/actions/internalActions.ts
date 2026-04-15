@@ -5,6 +5,8 @@ import { serverGetAllAction } from './getAllAction';
 import { serverQueryAction } from './queryAction';
 import { serverDistinctAction } from './distinctAction';
 import { reconcileAction } from './reconcileAction';
+import { serverSignOutAction } from './signOutAction';
+
 export const internalActions: SocketAPIServerAction[] = [
   clientToServerSyncAction,
   serverGetAction,
@@ -12,5 +14,6 @@ export const internalActions: SocketAPIServerAction[] = [
   serverQueryAction,
   serverDistinctAction,
   reconcileAction,
+  serverSignOutAction,
 ];
 

@@ -10,8 +10,11 @@
  */
 import { createComponent } from '@anupheaus/react-ui';
 import type { ReactNode } from 'react';
-import { SocketAPI, useEvent, useSocketAPI } from '@anupheaus/socket-api/client';
-import { mxdbTokenRotated } from '../../common';
+import { SocketAPI, useEvent, useSocketAPI, useAction } from '@anupheaus/socket-api/client';
+import { mxdbTokenRotated, mxdbUserAuthenticated } from '../../common';
+import { mxdbSignOutAction } from '../../common/internalActions';
+import { useContext, useEffect } from 'react';
+import { UserIdContext } from './UserIdContext';
 import { ClientToServerSyncProvider, ClientToServerProvider } from '../providers/client-to-server';
 import { ServerToClientProvider } from '../providers/server-to-client';
 import type { MXDBCollection, MXDBError } from '../../common';
@@ -24,14 +27,16 @@ interface Props {
   collections: MXDBCollection[];
   onError?(error: MXDBError): void;
   onTokenRotated(newToken: string): Promise<void>;
+  onRegisterSignOutAction(fn: (() => void) | undefined): void;
   children?: ReactNode;
 }
 
-// Inner component — must be a child of SocketAPI to use useEvent / useSocketAPI.
+// Inner component — must be a child of SocketAPI to use useEvent / useSocketAPI / useAction.
 interface InnerProps {
   collections: MXDBCollection[];
   onError?(error: MXDBError): void;
   onTokenRotated(newToken: string): Promise<void>;
+  onRegisterSignOutAction(fn: (() => void) | undefined): void;
   children?: ReactNode;
 }
 
@@ -39,10 +44,22 @@ const SocketInner = createComponent('SocketInner', ({
   collections,
   onError,
   onTokenRotated,
+  onRegisterSignOutAction,
   children,
 }: InnerProps) => {
   const { getRawSocket } = useSocketAPI();
+  const { setUser } = useContext(UserIdContext);
   const onTokenRotatedEvent = useEvent(mxdbTokenRotated);
+  const onUserAuthenticatedEvent = useEvent(mxdbUserAuthenticated);
+  const { mxdbSignOutAction: fireSignOut } = useAction(mxdbSignOutAction);
+
+  // Register the fire function so AuthProvider can call it from signOut()
+  useEffect(() => {
+    onRegisterSignOutAction(() => fireSignOut());
+    return () => onRegisterSignOutAction(undefined);
+  }, [fireSignOut, onRegisterSignOutAction]);
+
+  onUserAuthenticatedEvent(userDetails => setUser(userDetails));
 
   onTokenRotatedEvent(async ({ newToken }) => {
     await onTokenRotated(newToken);
@@ -70,6 +87,7 @@ export const SocketProvider = createComponent('SocketProvider', ({
   collections,
   onError,
   onTokenRotated,
+  onRegisterSignOutAction,
   children,
 }: Props) => (
   <SocketAPI name={appName} host={host} auth={{ token, keyHash }}>
@@ -77,6 +95,7 @@ export const SocketProvider = createComponent('SocketProvider', ({
       collections={collections}
       onError={onError}
       onTokenRotated={onTokenRotated}
+      onRegisterSignOutAction={onRegisterSignOutAction}
     >
       {children}
     </SocketInner>

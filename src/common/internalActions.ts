@@ -32,3 +32,6 @@ export const mxdbGetAllAction = defineAction<GetAllRequest, GetResponse>()('mxdb
 export const mxdbQueryAction = defineAction<QueryRequest, QueryResponse>()('mxdbQueryAction');
 export const mxdbDistinctAction = defineAction<DistinctRequest, DistinctResponse>()('mxdbDistinctAction');
 
+// ─── Auth ───────────────────────────────────────────────────────────────────
+/** Sent by the client when the user explicitly signs out. No payload or response. */
+export const mxdbSignOutAction = defineAction<void, void>()('mxdbSignOutAction');

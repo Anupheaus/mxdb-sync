@@ -1,10 +1,12 @@
 // ─── §4.4 Auth models (shared between client and server) ─────────────────────
 
+import type { Record } from '@anupheaus/common';
+
 /**
  * User details returned by `onGetUserDetails` on the server and sent to the
  * client to populate the WebAuthn passkey prompt.
  */
-export interface MXDBUserDetails {
+export interface MXDBUserDetails extends Record {
   /** Shown in the passkey prompt as the account identifier (e.g. email address). */
   name: string;
   /** Human-readable display name for the prompt (e.g. full name). Defaults to `name`. */

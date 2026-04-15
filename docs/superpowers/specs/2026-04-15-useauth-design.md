@@ -124,23 +124,23 @@ export const mxdbSignOutAction = defineAction<void, void>()('mxdbSignOutAction')
 
 ---
 
-## 6. `mxdbUserAuthenticated` event extended
+## 6. `mxdbUserAuthenticated` event simplified
 
 **File:** `src/common/internalEvents.ts`
 
-The `mxdbUserAuthenticated` event payload gains `userDetails: MXDBUserDetails`:
+Since `MXDBUserDetails` now extends `Record` (giving it `id: string`), the event payload becomes simply `MXDBUserDetails` — `id` carries the userId, removing the need for a separate `userId` field:
 
 ```ts
 // before
 { userId: string }
 
 // after
-{ userId: string; userDetails: MXDBUserDetails }
+MXDBUserDetails  // id === userId
 ```
 
-**Server side** — in `startAuthenticatedServer.ts`, the server calls `onGetUserDetails(record.userId)` and includes the result in the event emission. (The result is also stored in `MutableAuthState`, so `onGetUserDetails` is called exactly once per connection.)
+**Server side** — in `startAuthenticatedServer.ts`, the server calls `onGetUserDetails(record.userId)`, merges `id: record.userId` into the result, and emits it directly. (The same object is stored in `MutableAuthState`, so `onGetUserDetails` is called exactly once per connection.)
 
-**Client side** — `AuthProvider` already listens for this event to set `userId`. It now also stores `userDetails` in state and provides it through `AuthContext`.
+**Client side** — `AuthProvider` reads `user.id` for the userId and stores the full `MXDBUserDetails` in state, providing it through `AuthContext`. The separate `userId` state variable is replaced by `user?.id`.
 
 ---
 
@@ -191,8 +191,8 @@ Client connects
   └─ Server: findByToken → onGetUserDetails(userId) → MutableAuthState
        ├─ WeakMap.set(socket, state)
        ├─ setAuthState(state)           ← async context for actions
-       ├─ emitUserAuthenticated({ userId, userDetails })
-       │     └─ Client: stores user in AuthContext
+       ├─ emitUserAuthenticated(userDetails)   ← userDetails.id === userId
+       │     └─ Client: stores user in AuthContext (user.id replaces separate userId state)
        └─ config.onConnected({ user, deviceInfo })
 
 Action handler (server)

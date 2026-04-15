@@ -4,7 +4,7 @@ import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { createElement } from 'react';
 import { AuthContext, type AuthContextValue } from './AuthContext';
-import { useMXDBAuth } from '../hooks/useMXDBAuth';
+import { useAuth } from '../hooks/useAuth';
 import { useMXDBSignOut } from '../hooks/useMXDBSignOut';
 import { useMXDBInvite } from '../hooks/useMXDBInvite';
 
@@ -15,16 +15,13 @@ import { useMXDBInvite } from '../hooks/useMXDBInvite';
 function makeContextValue(overrides: Partial<AuthContextValue> = {}): AuthContextValue {
   return {
     isAuthenticated: false,
+    user: undefined,
     signOut: vi.fn(),
-    register: vi.fn().mockResolvedValue({ userDetails: { id: 'user-1', displayName: 'Alice' } }),
+    register: vi.fn().mockResolvedValue({ userDetails: { id: 'user-1', name: 'alice@example.com', displayName: 'Alice' } }),
     ...overrides,
   };
 }
 
-/**
- * Renders a React component inside an `AuthContext.Provider` and returns the
- * container. Unmount using the returned `cleanup` function.
- */
 function renderWithAuthContext(
   contextValue: AuthContextValue,
   component: (container: HTMLDivElement) => React.ReactElement,
@@ -53,9 +50,9 @@ function renderWithAuthContext(
   };
 }
 
-// ─── useMXDBAuth ──────────────────────────────────────────────────────────────
+// ─── useAuth ──────────────────────────────────────────────────────────────────
 
-describe('useMXDBAuth', () => {
+describe('useAuth', () => {
   let cleanup: (() => void) | undefined;
 
   afterEach(() => {
@@ -65,10 +62,10 @@ describe('useMXDBAuth', () => {
 
   it('returns isAuthenticated: false when context value is false', () => {
     const ctx = makeContextValue({ isAuthenticated: false });
-    let result: { isAuthenticated: boolean } | undefined;
+    let result: ReturnType<typeof useAuth> | undefined;
 
     function Probe() {
-      result = useMXDBAuth();
+      result = useAuth();
       return null;
     }
 
@@ -80,10 +77,10 @@ describe('useMXDBAuth', () => {
 
   it('returns isAuthenticated: true when context value is true', () => {
     const ctx = makeContextValue({ isAuthenticated: true });
-    let result: { isAuthenticated: boolean } | undefined;
+    let result: ReturnType<typeof useAuth> | undefined;
 
     function Probe() {
-      result = useMXDBAuth();
+      result = useAuth();
       return null;
     }
 
@@ -93,15 +90,46 @@ describe('useMXDBAuth', () => {
     expect(result?.isAuthenticated).toBe(true);
   });
 
+  it('returns user: undefined when context has no user', () => {
+    const ctx = makeContextValue({ user: undefined });
+    let result: ReturnType<typeof useAuth> | undefined;
+
+    function Probe() {
+      result = useAuth();
+      return null;
+    }
+
+    const rendered = renderWithAuthContext(ctx, () => createElement(Probe));
+    cleanup = rendered.cleanup;
+
+    expect(result?.user).toBeUndefined();
+  });
+
+  it('returns user details when context has a user', () => {
+    const user = { id: 'u-1', name: 'alice@example.com', displayName: 'Alice' };
+    const ctx = makeContextValue({ isAuthenticated: true, user });
+    let result: ReturnType<typeof useAuth> | undefined;
+
+    function Probe() {
+      result = useAuth();
+      return null;
+    }
+
+    const rendered = renderWithAuthContext(ctx, () => createElement(Probe));
+    cleanup = rendered.cleanup;
+
+    expect(result?.user).toEqual(user);
+  });
+
   it('reflects a context update when the provider value changes', () => {
     const container = document.createElement('div');
     document.body.appendChild(container);
     const root = createRoot(container);
 
-    let result: { isAuthenticated: boolean } | undefined;
+    let result: ReturnType<typeof useAuth> | undefined;
 
     function Probe() {
-      result = useMXDBAuth();
+      result = useAuth();
       return null;
     }
 
@@ -209,12 +237,11 @@ describe('useMXDBInvite', () => {
     const rendered = renderWithAuthContext(ctx, () => createElement(Probe));
     cleanup = rendered.cleanup;
 
-    // The returned function IS the register function from context.
     expect(result).toBe(registerMock);
   });
 
   it('invoking the returned function calls context register with the given url', async () => {
-    const registerMock = vi.fn().mockResolvedValue({ userDetails: { id: 'u1', displayName: 'Bob' } });
+    const registerMock = vi.fn().mockResolvedValue({ userDetails: { id: 'u1', name: 'bob@example.com', displayName: 'Bob' } });
     const ctx = makeContextValue({ register: registerMock });
     let result: ReturnType<typeof useMXDBInvite> | undefined;
 

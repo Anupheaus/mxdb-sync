@@ -21,6 +21,7 @@ interface Props {
   onError?(error: MXDBError): void;
   /** Provided by AuthProvider immediately after registration when SQLite is still empty. */
   initialAuth?: { token: string; keyHash: string };
+  onRegisterSignOutAction(fn: (() => void) | undefined): void;
   children?: ReactNode;
 }
 
@@ -30,6 +31,7 @@ export const TokenProvider = createComponent('TokenProvider', ({
   collections,
   onError,
   initialAuth,
+  onRegisterSignOutAction,
   children,
 }: Props) => {
   const { db } = useDb();
@@ -42,7 +44,10 @@ export const TokenProvider = createComponent('TokenProvider', ({
     (async () => {
       try {
         let auth = await db.readAuth();
-        if (auth == null && initialAuth != null) {
+        if (initialAuth != null) {
+          // Always write and use initialAuth when provided — covers both first-time
+          // registration (OPFS empty) and dev-bypass (fresh token each call overwrites
+          // any previously rotated stale token in OPFS).
           await db.writeAuth(initialAuth.token, initialAuth.keyHash);
           auth = initialAuth;
         }
@@ -82,6 +87,7 @@ export const TokenProvider = createComponent('TokenProvider', ({
       collections={collections}
       onError={onError}
       onTokenRotated={onTokenRotated}
+      onRegisterSignOutAction={onRegisterSignOutAction}
     >
       {children}
     </SocketProvider>

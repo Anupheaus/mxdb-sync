@@ -255,14 +255,18 @@ describe('recordDiff — anonymous arrays', () => {
 // ─── Rich types (Date, RegExp treated as scalars) ─────────────────────────────
 
 describe('recordDiff — rich types treated as scalars', () => {
-  it('emits Replace for different Date values', () => {
+  it('emits Replace for different Date values (op value is ISO string)', () => {
     const d1 = new Date('2024-01-01');
     const d2 = new Date('2024-06-01');
     const a = rec({ createdAt: d1 });
     const b = rec({ createdAt: d2 });
     const ops = recordDiff(a, b);
     expect(ops).toHaveLength(1);
-    expect(ops[0]).toMatchObject({ type: OperationType.Replace, path: 'createdAt', value: d2 });
+    expect(ops[0].type).toBe(OperationType.Replace);
+    expect(ops[0].path).toBe('createdAt');
+    // Date objects are serialised to ISO strings for JSON-safe storage
+    expect(typeof ops[0].value).toBe('string');
+    expect(new Date(ops[0].value as string).getTime()).toBe(d2.getTime());
   });
 
   it('emits no ops for identical Date values', () => {

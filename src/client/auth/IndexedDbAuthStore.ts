@@ -1,5 +1,5 @@
 /**
- * §4.3 / §4.4 — IndexedDB auth store.
+ * IndexedDB auth store.
  *
  * Stores one record per registered device:
  *   { id, credentialId, dbName, isDefault }

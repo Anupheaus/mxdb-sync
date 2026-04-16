@@ -1,5 +1,5 @@
 /**
- * §4.4 — In-memory rate limiter for invite redemption.
+ * In-memory rate limiter for invite redemption.
  *
  * Limits per source IP: `maxAttempts` within a rolling `windowMs` window.
  * Resets automatically when the window expires. Not shared across processes —

@@ -13,7 +13,7 @@ function fnv64Hex(input: string): string {
   return h1.toString(16).padStart(8, '0') + h2.toString(16).padStart(8, '0');
 }
 
-/** §2.3 Deterministic JSON: keys sorted, no whitespace, undefined omitted. */
+/** Deterministic JSON: keys sorted, no whitespace, undefined omitted. */
 export function deterministicJson(value: unknown): string {
   if (value === null) return 'null';
   if (value === undefined) return 'undefined';
@@ -36,7 +36,7 @@ export function contentHash(obj: unknown): string {
   return fnv64Hex(deterministicJson(obj));
 }
 
-/** §2.3 Record hash: SHA-256 of deterministic JSON, truncated to 16 hex chars. */
+/** Record hash: SHA-256 of deterministic JSON, truncated to 16 hex chars. */
 export async function hashRecord(record: MXDBRecord): Promise<string> {
   const json = deterministicJson(record);
 

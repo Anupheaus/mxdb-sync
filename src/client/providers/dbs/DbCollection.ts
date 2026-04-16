@@ -499,7 +499,7 @@ export class DbCollection<RecordType extends Record = Record> {
   }
 
   /**
-   * Called by Db when another tab writes to this collection (§4.9 cross-tab reactivity).
+   * Called by Db when another tab writes to this collection (cross-tab reactivity).
    * Reloads the in-memory cache from SQLite and emits a 'reload' event to subscribers.
    */
   @bind

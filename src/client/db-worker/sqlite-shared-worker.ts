@@ -1,12 +1,12 @@
 /**
- * SQLite WASM SharedWorker — §4.9 Multi-Tab Coordination
+ * SQLite WASM SharedWorker — Multi-Tab Coordination
  *
  * One instance shared across all tabs of the same origin. Each tab connects
  * via a MessagePort and is assigned a unique portId on the first 'connect'
  * request. After any write (exec / exec-batch) a 'change-notification' is
  * broadcast to every other port so their DbCollections can reload.
  *
- * §4.3 Encryption: when `encryptionKey` is supplied in the `open` request the
+ * Encryption: when `encryptionKey` is supplied in the `open` request the
  * database is kept in memory and persisted as an AES-GCM blob (`*.enc`) in
  * OPFS after every write. All tabs share the same in-memory instance, so the
  * key only needs to be correct on the first open; subsequent tabs that trigger
@@ -40,11 +40,11 @@ let db: OO1Db | null = null;
 let sqlite3: Sqlite3 | null = null;
 const ports = new Map<string, PortEntry>();
 
-// §4.3 — per-database encryption state
+// Per-database encryption state
 let cryptoKey: CryptoKey | null = null;
 let encryptedFileName = '';
 
-// §4.9 — exclusive Web Lock. Acquired once by the SharedWorker singleton on
+// Exclusive Web Lock. Acquired once by the SharedWorker singleton on
 // first open; skipped on subsequent opens because lockRef.release is already set.
 // Prevents a second dedicated-worker tab from stealing the same OPFS file.
 const lockRef: LockRef = { release: null };

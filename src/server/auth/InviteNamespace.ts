@@ -1,5 +1,5 @@
 /**
- * §4.4 — Invite socket server.
+ * Invite socket server.
  *
  * Creates a dedicated socket.io Server mounted at `/{name}/register` on the
  * same HTTP server as the main socket.io server. Clients open a separate

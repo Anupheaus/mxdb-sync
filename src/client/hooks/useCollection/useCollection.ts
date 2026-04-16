@@ -35,7 +35,7 @@ export function useCollection<RecordType extends Record>(collection: MXDBCollect
   const { db } = useDb(dbName);
   const config = configRegistry.getOrError(collection);
 
-  // §4.5 — Wrong-side collection guard: ServerOnly collections must not be used on the client
+  // Wrong-side collection guard: ServerOnly collections must not be used on the client
   if (config.syncMode === 'ServerOnly') {
     throw new Error(`Collection "${collection.name}" is ServerOnly and cannot be accessed on the client.`);
   }

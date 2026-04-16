@@ -1,5 +1,5 @@
 /**
- * §4.3 — Derive a 256-bit AES-GCM encryption key from a WebAuthn credential
+ * Derive a 256-bit AES-GCM encryption key from a WebAuthn credential
  * via the PRF extension.
  *
  * Throws in all non-success paths: unencrypted storage is never permitted.

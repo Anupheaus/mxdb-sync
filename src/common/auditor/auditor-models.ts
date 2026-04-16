@@ -1,6 +1,6 @@
 import type { Record } from '@anupheaus/common';
 
-// §2.1 Technical Enums
+// Audit entry type enums
 export enum AuditEntryType {
   Created = 0,   // Full initial state
   Updated = 1,   // Partial updates (ops)
@@ -20,8 +20,6 @@ export enum TargetPosition {
   First = 'FIRST',
   Last = 'LAST',
 }
-
-// §2.2 Audit Structure Models
 
 /**
  * An operation recorded in an AuditUpdateEntry.

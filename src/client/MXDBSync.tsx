@@ -33,7 +33,7 @@ export const MXDBSync = createComponent('MXDBSync', ({
   if (host != null) {
     const protocol = host.match(/^([a-z][a-z0-9+\-.]*:\/\/)/i)?.[1]?.toLowerCase();
     if (protocol != null && protocol !== 'wss://') {
-      throw new Error(`MXDBSync: connection to "${host}" uses an insecure protocol. Only wss:// is allowed (§4.7).`);
+      throw new Error(`MXDBSync: connection to "${host}" uses an insecure protocol. Only wss:// is allowed.`);
     }
   }
 

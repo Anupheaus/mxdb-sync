@@ -1,5 +1,5 @@
 /**
- * §4.4 — Thin MongoDB wrapper for the `mxdb_authentication` collection.
+ * Thin MongoDB wrapper for the `mxdb_authentication` collection.
  *
  * Intentionally NOT a ServerDbCollection — auth records should never be synced
  * to clients, and we don't need change streams or Atlas Admin-level index setup.

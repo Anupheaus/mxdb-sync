@@ -7,7 +7,7 @@ export interface OpenRequest {
   /** DDL statements to run on open (CREATE TABLE IF NOT EXISTS, etc.) */
   statements: string[];
   /**
-   * §4.3 — Raw 256-bit AES-GCM key bytes derived from WebAuthn PRF.
+   * Raw 256-bit AES-GCM key bytes derived from WebAuthn PRF.
    * When present the worker encrypts/decrypts the OPFS file with AES-GCM.
    * Omit (or pass `undefined`) for an unencrypted database.
    */

@@ -40,7 +40,7 @@ export function useRecord<Collection extends MXDBCollection<Record>>(recordOrId:
     if (oldDbRecord == null) return;
 
     if (dbRecord == null) {
-      // §6.4 — Record deleted on server while user was editing
+      // Record deleted on server while user was editing
       if (onConflictResolution != null) {
         const userRecord = recordOrIdRef.current as RecordTypeOfCollection<Collection>;
         void onConflictResolution('This record has been deleted by another user. Do you want to restore it?').then(restore => {
@@ -52,7 +52,7 @@ export function useRecord<Collection extends MXDBCollection<Record>>(recordOrId:
 
     if (is.deepEqual(oldDbRecord, dbRecord)) return;
 
-    // DB changed while user is editing — rebase user's edits on top of new server state (§6.3)
+    // DB changed while user is editing — rebase user's edits on top of new server state
     const userRecord = recordOrIdRef.current as RecordTypeOfCollection<Collection>;
     const rebased = auditor.rebaseRecord(oldDbRecord, userRecord, dbRecord);
     setRebasedRecord(rebased);

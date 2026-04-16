@@ -1,4 +1,4 @@
-import type { Logger, Record as MXDBRecord } from '@anupheaus/common';
+import { to, type Logger, type Record as MXDBRecord } from '@anupheaus/common';
 import {
   AuditEntryType,
   TargetPosition,
@@ -60,7 +60,7 @@ export function filterValidEntries<T extends MXDBRecord>(entries: unknown[], log
   }
 
   if (valid.length !== entries.length) {
-    logger?.warn(`[auditor] filtered ${entries.length - valid.length} invalid audit entries`);
+    logger?.warn('[auditor] replay: filtered invalid entries', { removed: entries.length - valid.length, total: entries.length });
   }
 
   return valid;
@@ -77,13 +77,13 @@ export function applyOp(record: unknown, op: AuditOperation, logger?: Logger): u
   for (let i = 0; i < rawSegs.length - 1; i++) {
     const seg = rawSegs[i];
     if (parent == null || typeof parent !== 'object') {
-      logger?.warn(`[auditor] §6.9#1 missing parent at "${rawSegs.slice(0, i).join('.')}" — ignoring op`);
+      logger?.warn('[auditor] applyOp: missing parent — ignoring op', { path: op.path, resolvedTo: rawSegs.slice(0, i).join('.') });
       return record;
     }
     if (Array.isArray(parent)) {
       const idx = resolveArrayIndex(parent, seg, i === rawSegs.length - 2 ? op.hash : undefined);
       if (idx == null) {
-        logger?.warn(`[auditor] §6.9#2/3 cannot resolve array index at seg "${seg}" — ignoring op`);
+        logger?.warn('[auditor] applyOp: cannot resolve array index — ignoring op', { path: op.path, seg: String(seg) });
         return record;
       }
       parent = (parent as unknown[])[idx];
@@ -95,7 +95,7 @@ export function applyOp(record: unknown, op: AuditOperation, logger?: Logger): u
   const lastSeg = rawSegs[rawSegs.length - 1];
 
   if (parent == null || typeof parent !== 'object') {
-    logger?.warn('[auditor] §6.9#1 missing parent for last seg — ignoring op');
+    logger?.warn('[auditor] applyOp: missing parent for last segment — ignoring op', { path: op.path });
     return record;
   }
 
@@ -136,7 +136,7 @@ export function applyOp(record: unknown, op: AuditOperation, logger?: Logger): u
       }
     }
   } catch (err) {
-    logger?.warn(`[auditor] §6.9#5 op threw: ${(err as Error)?.message} — ignoring op`);
+    logger?.warn('[auditor] applyOp threw — ignoring op', { path: op.path, error: (err as Error)?.message });
   }
 
   return record;
@@ -184,9 +184,7 @@ export function replayHistoryEndState<T extends MXDBRecord>(
   let shadow: T | undefined = baseRecord;
   let foundBase = baseRecord != null;
 
-  logger?.debug(
-    `[replay-diag] replayHistory start entries=${sorted.length} baseRecord=${baseRecord != null} order=${sorted.map(e => `${e.type}:${e.id}`).join(',')}`,
-  );
+  logger?.debug('[auditor] replay start', { entries: sorted.length, hasBaseRecord: baseRecord != null });
 
   let entryIndex = 0;
   for (const entry of sorted) {
@@ -195,13 +193,9 @@ export function replayHistoryEndState<T extends MXDBRecord>(
       case AuditEntryType.Created: {
         const createdRecord = (entry as AuditCreatedEntry<T>).record;
         if (createdRecord == null) {
-          logger?.error(
-            `[auditor] replay skip Created entry "${entry.id}" [${entryIndex}/${sorted.length}]: missing record payload`,
-          );
+          logger?.error('[auditor] replay: Created entry missing record payload', { entryId: entry.id, index: entryIndex, total: sorted.length });
         } else {
-          logger?.debug(
-            `[replay-diag] Created entry "${entry.id}" [${entryIndex}/${sorted.length}] — resetting live+shadow (hadBase=${foundBase})`,
-          );
+          logger?.debug('[auditor] replay: Created — resetting live+shadow', { entryId: entry.id, index: entryIndex, hadBase: foundBase });
           const next = Object.clone(createdRecord);
           live = next;
           shadow = next;
@@ -232,34 +226,36 @@ export function replayHistoryEndState<T extends MXDBRecord>(
       case AuditEntryType.Updated: {
         if (shadow == null) {
           const opN = (entry as AuditUpdateEntry).ops?.length ?? 0;
-          logger?.error(
-            `[auditor] replay skip Updated entry "${entry.id}" [${entryIndex}/${sorted.length}]: `
-            + `no materialized anchor (need Created or baseRecord in this replay window) (ops=${opN})`,
-          );
+          logger?.error('[auditor] replay: Updated entry skipped — no anchor (need Created or baseRecord)', { entryId: entry.id, index: entryIndex, total: sorted.length, ops: opN });
           break;
         }
-        const beforeTags = JSON.stringify((shadow as any)?.tags);
-        const opCount = (entry as AuditUpdateEntry).ops?.length ?? 0;
         shadow = applyUpdateEntryToClone(shadow, entry as AuditUpdateEntry, logger);
         if (live != null) {
           live = applyUpdateEntryToClone(live, entry as AuditUpdateEntry, logger);
-        }
-        const afterTags = JSON.stringify((shadow as any)?.tags);
-        if (beforeTags !== afterTags) {
-          logger?.debug(
-            `[replay-diag] Updated entry "${entry.id}" [${entryIndex}/${sorted.length}] ops=${opCount} tags: ${beforeTags} → ${afterTags}`,
-          );
         }
         break;
       }
     }
   }
 
-  logger?.debug(
-    `[replay-diag] replayHistory done finalLive=${live != null} finalShadow=${shadow != null} (processed ${sorted.length} entries)`,
-  );
+  logger?.debug('[auditor] replay done', { entries: sorted.length, hasLive: live != null, hasShadow: shadow != null });
 
-  return { live, shadow };
+  // Deserialise the materialised records so rich types (e.g. Luxon DateTime) are
+  // restored from their in-memory forms.
+  //
+  // We pass the record through `to.serialise` before `to.deserialise` because
+  // records sourced from Created/Restored entries are preserved by `Object.clone`
+  // with live DateTime instances intact.  `to.deserialise` does not guard against
+  // existing DateTime objects — it calls `deserialiseObject` on them, which strips
+  // all methods and leaves a broken plain object that merely has `isLuxonDateTime:
+  // true`.  Pre-serialising via `to.serialise` converts any live DateTimes to ISO
+  // strings first, so the subsequent deserialise pass correctly restores them as
+  // proper DateTime instances.
+  const deserialise = (record: T): T => to.deserialise<T>(to.serialise(record));
+  return {
+    live: live != null ? deserialise(live) : undefined,
+    shadow: shadow != null ? deserialise(shadow) : undefined,
+  };
 }
 
 export function replayHistory<T extends MXDBRecord>(

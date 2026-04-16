@@ -50,7 +50,7 @@ export async function startAuthenticatedServer({
       tokenRotationGates.set(client, Promise.createDeferred<void>());
     },
 
-    // ─── §5.1 Gate check (before every action/subscription handler) ──────────
+    // ─── Gate check (before every action/subscription handler) ───────────────
     onBeforeHandle: async client => {
       const gate = tokenRotationGates.get(client);
       if (gate != null) await gate;
@@ -153,7 +153,7 @@ export async function startAuthenticatedServer({
         }
         tokenRotationGates.get(client)?.resolve();
 
-        // §2.1 — Create per-connection ServerToClientSynchronisation instance
+        // Create per-connection ServerToClientSynchronisation instance
         const s2cLogger = (logger ?? Logger.getCurrent() ?? new Logger('mxdb-sync')).createSubLogger(`s2c:${client.id}`);
         const emitS2C = useAction(mxdbServerToClientSyncAction);
         const s2c = new ServerToClientSynchronisation({
@@ -180,7 +180,7 @@ export async function startAuthenticatedServer({
       tokenRotationGates.get(client)?.reject();
       removeClientWatches(client);
 
-      // §2.1 — Tear down the per-connection S2C instance
+      // Tear down the per-connection S2C instance
       const s2c = clientS2CInstances.get(client);
       if (s2c != null) {
         s2c.close();

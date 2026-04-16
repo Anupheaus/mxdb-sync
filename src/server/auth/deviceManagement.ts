@@ -1,5 +1,5 @@
 /**
- * §4.4 / §7.4 — Device management public server APIs.
+ * Device management public server APIs.
  *
  * These are plain async functions (not socket actions). The app server calls
  * them e.g. from admin routes. They require a raw MongoDB `Db` instance

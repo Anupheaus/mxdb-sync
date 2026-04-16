@@ -3,6 +3,7 @@
 ## Before making changes
 
 - **Read**: `c:/code/personal/agents/global-agent.md`
+- **Search `@anupheaus/common` before writing utility functions**: The common library (`c:/code/personal/common/src/`) provides many utilities — serialisation (`to.serialise`, `to.deserialise`), deep equality (`is.deepEqual`, handles Luxon DateTime, Date, functions), object cloning (`Object.clone`), type guards, and more. Before implementing anything locally, search the common library first. Using existing common utilities avoids duplicated logic and benefits from already-correct edge-case handling (e.g. `is.deepEqual` uses `DateTime.equals()` for Luxon, not naive JSON comparison).
 
 ## Documentation
 
@@ -156,3 +157,27 @@ The sync test is failing due to **extra records on the server** that don't match
 ## Next Steps
 
 The sync test provides a controlled environment to identify and fix data integrity issues. The comprehensive logging and records of truth make it possible to trace exactly where extra records are being created and why they don't match the expected final state.
+
+## Running "All" Tests
+
+When the user asks to run "all" tests, run the following four suites **sequentially** (each as a separate Bash call), recording the wall-clock duration and exit status of each:
+
+| Suite       | Command                  |
+|-------------|--------------------------|
+| Unit        | `pnpm test`              |
+| CRUD        | `pnpm test:crud`         |
+| Performance | `pnpm test:performance`  |
+| Stress      | `pnpm test:stress`       |
+
+After all four have finished, output a **summary table** in this format:
+
+| Suite       | Status | Duration |
+|-------------|--------|----------|
+| Unit        | ✅ Pass / ❌ Fail | Xs |
+| CRUD        | ✅ Pass / ❌ Fail | Xs |
+| Performance | ✅ Pass / ❌ Fail | Xs |
+| Stress      | ✅ Pass / ❌ Fail | Xs |
+
+- **Status**: ✅ Pass if the command exited 0, ❌ Fail otherwise.
+- **Duration**: wall-clock time for that suite (e.g. `42s`, `2m 3s`).
+- Always run all four suites even if an earlier one fails, so the full picture is visible.

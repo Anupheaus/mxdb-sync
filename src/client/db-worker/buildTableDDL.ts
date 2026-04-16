@@ -7,7 +7,6 @@ export const SYNC_TABLE_SUFFIX = '_sync';
 /**
  * Generates CREATE TABLE and CREATE INDEX DDL statements for a collection.
  * All statements use IF NOT EXISTS so they are idempotent.
- * §4.3 — table schemas from the design spec.
  */
 /** Double-quote an identifier so SQLite accepts any character (including hyphens). */
 export function q(identifier: string): string {

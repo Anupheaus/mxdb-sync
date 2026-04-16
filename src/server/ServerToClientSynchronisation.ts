@@ -116,9 +116,9 @@ export class ServerToClientSynchronisation {
   }
 
   /**
-   * §2.4 — Feed a MongoDB change-stream event into the SD.
+   * Feed a MongoDB change-stream event into the SD.
    *
-   * Tombstoned records are filtered OUT here (§10.1): once a record has been
+   * Tombstoned records are filtered OUT here: once a record has been
    * deleted, only the original `Deleted` transition is propagated. Subsequent
    * audit mutations on a tombstoned record never reach the SD.
    *
@@ -226,7 +226,7 @@ export class ServerToClientSynchronisation {
         const auditAfter = auditAfterMap.get(id);
 
         if ((auditBefore != null && auditor.isDeleted(auditBefore)) || (auditAfter != null && auditor.isDeleted(auditAfter))) {
-          this.#logger.silly('[s2c] #buildAndPush: filtered tombstoned record per §10.1', { collectionName, recordId: id });
+          this.#logger.silly('[s2c] #buildAndPush: filtered tombstoned record', { collectionName, recordId: id });
           continue;
         }
 

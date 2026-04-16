@@ -79,7 +79,7 @@ function detectMode(): ClientMode {
 
 export interface SqliteWorkerClientOptions {
   /**
-   * §4.3 — Raw 256-bit AES-GCM key bytes derived from WebAuthn PRF.
+   * Raw 256-bit AES-GCM key bytes derived from WebAuthn PRF.
    * When provided the worker encrypts the OPFS database file at rest.
    * Omit for an unencrypted database (test / non-WebAuthn environments).
    */
@@ -90,7 +90,7 @@ export interface SqliteWorkerClientOptions {
  * Main-thread proxy for the SQLite worker.
  *
  * Mode selection (auto-detected at construction time):
- *  - **shared**   SharedWorker — one SQLite instance for all tabs (§4.9 preferred)
+ *  - **shared**   SharedWorker — one SQLite instance for all tabs (preferred)
  *  - **dedicated** Dedicated Worker — one SQLite instance per tab (fallback for Cordova)
  *  - **inline**   No worker — runs SQLite in-process for Node.js / tests
  *

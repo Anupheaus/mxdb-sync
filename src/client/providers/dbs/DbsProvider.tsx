@@ -12,7 +12,7 @@ interface Props {
   name: string;
   logger?: Logger;
   collections: MXDBCollection[];
-  /** §4.3 — Raw 256-bit AES-GCM key bytes from WebAuthn PRF. Omit for unencrypted. */
+  /** Raw 256-bit AES-GCM key bytes from WebAuthn PRF. Omit for unencrypted. */
   encryptionKey?: Uint8Array;
   children?: ReactNode;
 }

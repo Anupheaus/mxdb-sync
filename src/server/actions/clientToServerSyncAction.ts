@@ -48,13 +48,12 @@ function withRecordLocks<T>(keys: string[], fn: () => Promise<T>): Promise<T> {
 }
 
 /**
- * §5.1 — Client-to-Server sync handler.
+ * Client-to-Server sync handler.
  *
  * Thin wrapper around {@link ServerReceiver}. The SR handles merge, replay,
  * delete-is-final enforcement, and post-merge SD push orchestration. This
- * handler just plumbs `onRetrieve` (read current server audits) and
- * `onUpdate` (persist merged audits + materialised records via
- * `ServerDbCollection.sync`).
+ * handler plumbs `onRetrieve` (read current server audits) and `onUpdate`
+ * (persist merged audits + materialised records via `ServerDbCollection.sync`).
  */
 export const clientToServerSyncAction = createServerActionHandler(
   mxdbClientToServerSyncAction,
@@ -75,10 +74,7 @@ export const clientToServerSyncAction = createServerActionHandler(
         const retrieveT0 = performance.now();
         const out: MXDBRecordStates = [];
         // Bulk-fetch per collection: ONE audit query + ONE live-record query per collection
-        // instead of 2×N sequential round trips. This is the hot path for SR.process — a
-        // batched client request with 10+ records was previously doing 20+ sequential Mongo
-        // reads in series, which under per-record lock contention snowballed into 20s+
-        // end-to-end gaps (see stress log merge-diag growth 3s→14s→29s).
+        // instead of 2×N sequential round trips.
         await Promise.all(retrieveRequest.map(async item => {
           let collection: ReturnType<typeof db.use>;
           try { collection = db.use(item.collectionName); }
@@ -91,18 +87,9 @@ export const clientToServerSyncAction = createServerActionHandler(
           }
           if (item.recordIds.length === 0) return;
           const perColT0 = performance.now();
-          // §6.9 — DO NOT swallow errors here. A retrieve failure is NOT the same as
-          // "record does not exist": when this catch silently returned empty, the SR
-          // saw `serverState == null` for records that genuinely existed on the server,
-          // ran the new-record branch, and routed `[Branched, Updated]` payloads (after
-          // the SR strips Branched) into the ORPHAN-drop path — silently losing client
-          // edits while ack-ing them as successful. Failure modes that hit this path:
-          //   - "Cannot use a session that has ended" — request in flight at MongoClient.close
-          //   - "Client must be connected before running operations" — new server's
-          //     MongoClient mid-connect, but HTTP listener already accepting requests
-          // Both are transient post-restart errors; surfacing them lets the client retry
-          // on the next sync round, which is the only way to preserve the merge guarantee.
-          // Kick off both bulk fetches in parallel.
+          // DO NOT swallow errors here — a retrieve failure is NOT "record does not exist".
+          // The SR would see serverState == null and route entries into the ORPHAN-drop
+          // path, silently losing client edits. Surfacing the error lets the client retry.
           const [audits, liveRecords] = await Promise.all([
             collection.getAudit(item.recordIds),
             collection.get(item.recordIds),
@@ -126,16 +113,16 @@ export const clientToServerSyncAction = createServerActionHandler(
             }
           }
           const perColMs = Math.round(performance.now() - perColT0);
-          logger.debug(`[SR] onRetrieve bulk "${item.collectionName}" requested=${item.recordIds.length} audits=${audits.length} live=${liveRecords.length} returned=${records.length} ms=${perColMs}`);
+          logger.debug('[C2S] retrieve', { collection: item.collectionName, requested: item.recordIds.length, audits: audits.length, live: liveRecords.length, returned: records.length, ms: perColMs });
           if (perColMs >= 500) {
-            logger.warn(`[SR] slow onRetrieve bulk "${item.collectionName}" ms=${perColMs} requested=${item.recordIds.length}`);
+            logger.warn('[C2S] slow retrieve', { collection: item.collectionName, ms: perColMs, requested: item.recordIds.length });
           }
           if (records.length > 0) out.push({ collectionName: item.collectionName, records });
         }));
         const retrieveMs = Math.round(performance.now() - retrieveT0);
         if (retrieveMs >= 1000) {
           const totalIds = retrieveRequest.reduce((acc, it) => acc + it.recordIds.length, 0);
-          logger.warn(`[SR] slow onRetrieve total ms=${retrieveMs} collections=${retrieveRequest.length} totalIds=${totalIds}`);
+          logger.warn('[C2S] slow retrieve total', { ms: retrieveMs, collections: retrieveRequest.length, totalIds });
         }
         return out;
       },
@@ -210,9 +197,7 @@ export const clientToServerSyncAction = createServerActionHandler(
       }
     }
 
-    // §diag — dump every incoming record id + entry-type sequence at the socket
-    // boundary so we can prove whether a client's pending entries ever reached
-    // the server (vs. being lost in-flight across a CD restart / socket bounce).
+    // Log incoming record ids + entry types at the socket boundary for tracing.
     for (const col of request) {
       for (const rec of col.records) {
         const entryTypes = rec.entries.map(e => `${e.type}:${e.id}`).join(',');

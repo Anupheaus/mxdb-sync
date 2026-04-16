@@ -1,5 +1,5 @@
 /**
- * §4.4 — Two-phase token rotation.
+ * Two-phase token rotation.
  *
  * Token semantics:
  *  `pendingToken`  — the token stored in the client's SQLite DB; used to authenticate.

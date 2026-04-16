@@ -165,7 +165,7 @@ export class ClientToServerSynchronisation {
         continue;
       }
       // Successful active records → collapse local audit to the server-confirmed anchor.
-      // The CD passes the insertion-order last audit entry id (see ClientDispatcher §4.5),
+      // The CD passes the insertion-order last audit entry id,
       // which for a typical client-owned record is the final pending entry just synced.
       for (const rec of item.records ?? []) {
         collection.collapseAuditSync(rec.record.id, rec.lastAuditEntryId);

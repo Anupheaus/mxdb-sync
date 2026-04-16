@@ -1,9 +1,9 @@
-import type { Record as MXDBRecord } from '@anupheaus/common';
+import { to, is, type Record as MXDBRecord } from '@anupheaus/common';
 import { OperationType, type AuditOperation } from './auditor-models';
 import { contentHash } from './hash';
 
 /** Types that are treated as scalars even though typeof === 'object'. */
-const richTypes = new Set(['Date', 'RegExp', 'String', 'Number']);
+const richTypes = new Set(['Date', 'RegExp', 'String', 'Number', 'DateTime']);
 
 function isRichType(val: unknown): boolean {
   if (val == null || typeof val !== 'object') return false;
@@ -13,6 +13,28 @@ function isRichType(val: unknown): boolean {
 
 function isTraversable(val: unknown): val is object {
   return val != null && typeof val === 'object' && !isRichType(val);
+}
+
+/**
+ * Serialise a value to its JSON-safe form for storage in audit ops.
+ * Any object (including nested objects and arrays) is round-tripped through
+ * `to.serialise` so that rich types (Luxon DateTime, Date, Error) at any depth
+ * are converted to their string representations before being stored.
+ * Plain scalars are returned as-is.
+ */
+function toOpValue(val: unknown): unknown {
+  if (val == null || typeof val !== 'object') return val;
+  return JSON.parse(to.serialise(val));
+}
+
+/**
+ * Equality check for non-traversable (scalar/rich-type) values.
+ * Uses `is.deepEqual` from `@anupheaus/common` which handles Luxon DateTime
+ * via `DateTime.equals()`, JS Date via `getTime()`, functions via
+ * `toString()` + `name`, NaN via `sameValueZeroEqual`, and circular refs.
+ */
+function scalarEqual(a: unknown, b: unknown): boolean {
+  return is.deepEqual(a, b);
 }
 
 /** Returns the boxed-id path segment for an array element, e.g. "[id:abc]", or undefined. */
@@ -48,7 +70,7 @@ function diffObjects(
   // Keys added
   for (const key of Object.keys(newObj)) {
     if (!(key in oldObj)) {
-      ops.push({ type: OperationType.Add, path: joinPath(path, key), value: newObj[key] });
+      ops.push({ type: OperationType.Add, path: joinPath(path, key), value: toOpValue(newObj[key]) });
     }
   }
 }
@@ -83,7 +105,7 @@ function diffIdArray(
   // Added
   for (const [boxedId, newElem] of newById) {
     if (!oldById.has(boxedId)) {
-      ops.push({ type: OperationType.Add, path: joinPath(path, boxedId), value: newElem });
+      ops.push({ type: OperationType.Add, path: joinPath(path, boxedId), value: toOpValue(newElem) });
     }
   }
 
@@ -113,15 +135,15 @@ function diffAnonArray(
       ops.push({ type: OperationType.Remove, path: segPath, hash: contentHash(oldArr[i]) });
     } else if (i >= oldArr.length) {
       // Added at end
-      ops.push({ type: OperationType.Add, path: segPath, value: newArr[i] });
+      ops.push({ type: OperationType.Add, path: segPath, value: toOpValue(newArr[i]) });
     } else {
       const oldElem = oldArr[i];
       const newElem = newArr[i];
       if (isTraversable(oldElem) && isTraversable(newElem) && Array.isArray(oldElem) === Array.isArray(newElem)) {
         // Pass stack as-is; diffAny handles cycle detection internally for objects.
         diffAny(oldElem, newElem, segPath, ops, stack);
-      } else if (oldElem !== newElem && !(Number.isNaN(oldElem) && Number.isNaN(newElem))) {
-        ops.push({ type: OperationType.Replace, path: segPath, value: newElem, hash: contentHash(oldElem) });
+      } else if (!scalarEqual(oldElem, newElem)) {
+        ops.push({ type: OperationType.Replace, path: segPath, value: toOpValue(newElem), hash: contentHash(oldElem) });
       }
     }
   }
@@ -155,8 +177,8 @@ export function diffAny(
         );
       }
     }
-  } else if (oldVal !== newVal && !(Number.isNaN(oldVal) && Number.isNaN(newVal))) {
-    ops.push({ type: OperationType.Replace, path, value: newVal });
+  } else if (!scalarEqual(oldVal, newVal)) {
+    ops.push({ type: OperationType.Replace, path, value: toOpValue(newVal) });
   }
 }
 
@@ -172,4 +194,3 @@ export function recordDiff<T extends MXDBRecord>(oldRecord: T, newRecord: T): Au
   );
   return ops;
 }
-

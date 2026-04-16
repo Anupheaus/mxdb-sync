@@ -1,5 +1,5 @@
 /**
- * SQLite WASM Web Worker — §4.3
+ * SQLite WASM Web Worker
  *
  * Owns the sqlite-wasm instance and OPFS file handle. All DB operations
  * run here; the main thread communicates via postMessage with correlation IDs.
@@ -25,11 +25,11 @@ import type { Sqlite3, OO1Db, LockRef } from './sqlite-worker-shared';
 let db: OO1Db | null = null;
 let sqlite3: Sqlite3 | null = null;
 
-// §4.3 — per-database encryption state
+// Per-database encryption state
 let cryptoKey: CryptoKey | null = null;
 let encryptedFileName = '';
 
-// §4.9 — exclusive Web Lock held for the lifetime of this open database.
+// Exclusive Web Lock held for the lifetime of this open database.
 // Prevents a second dedicated-worker tab from opening the same OPFS file.
 const lockRef: LockRef = { release: null };
 

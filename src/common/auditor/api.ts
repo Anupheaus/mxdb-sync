@@ -1,5 +1,5 @@
 import { decodeTime } from 'ulidx';
-import type { Logger, Record as MXDBRecord } from '@anupheaus/common';
+import { to, type Logger, type Record as MXDBRecord } from '@anupheaus/common';
 import {
   AuditEntryType,
   type AnyAuditOf,
@@ -184,7 +184,7 @@ export function isAudit<T extends MXDBRecord>(
     typeof value === 'object' && value != null && typeof (value as AnyAuditOf<T>).id === 'string'
       ? (value as AnyAuditOf<T>).id
       : '?';
-  logger?.warn(`[auditor] isAudit(fullAudit=${fullAudit}) rejected id="${id}": ${reason}`);
+  logger?.warn(`[auditor] isAudit rejected id="${id}" fullAudit=${fullAudit}: ${reason}`);
   return false;
 }
 
@@ -300,52 +300,73 @@ export function merge<T extends MXDBRecord>(
   fullAudit = true,
 ): AnyAuditOf<T> {
   if (!isAuditDocument(serverAudit) || !isAuditDocument(clientAudit)) {
+    // Server audit structurally invalid but client is valid — adopt client to prevent data loss.
+    if (!isAuditDocument(serverAudit) && isAuditDocument(clientAudit)) {
+      logger?.error('[auditor] merge: server audit invalid document — adopting client audit', {
+        recordId: (clientAudit as AnyAuditOf<T>).id,
+        reason: getAuditDocumentRejectionReason(serverAudit),
+      });
+      return clientAudit as AnyAuditOf<T>;
+    }
     if (!isAuditDocument(serverAudit)) {
-      logger?.warn(
-        `[auditor] merge skipped: server audit invalid document: ${getAuditDocumentRejectionReason(serverAudit)}`,
-      );
+      logger?.warn('[auditor] merge: server audit invalid document', {
+        reason: getAuditDocumentRejectionReason(serverAudit),
+      });
     }
     if (!isAuditDocument(clientAudit)) {
-      logger?.warn(
-        `[auditor] merge skipped: client audit invalid document: ${getAuditDocumentRejectionReason(clientAudit)}`,
-      );
+      logger?.warn('[auditor] merge: client audit invalid document', {
+        reason: getAuditDocumentRejectionReason(clientAudit),
+      });
     }
     return serverAudit;
   }
 
-  const clientPasses = isAudit(clientAudit, fullAudit, logger);
-  const pendingOnlyFallback =
-    fullAudit &&
-    !clientPasses &&
-    isPendingOnlyClientAudit(clientAudit) &&
-    isAudit(serverAudit, fullAudit, logger);
+  // The SR strips Branched entries from the client audit before calling merge(),
+  // which legitimately leaves a lone Updated/Deleted/Restored as the first entry —
+  // a shape that fails full-audit validation. Detect that pending-only shape first
+  // and skip the client isAudit() warn, so the fallback path doesn't emit a
+  // misleading rejection warning for the common case.
+  const isPendingOnly = fullAudit && isPendingOnlyClientAudit(clientAudit);
+  const clientPasses = isPendingOnly ? false : isAudit(clientAudit, fullAudit, logger);
+  const pendingOnlyFallback = isPendingOnly && isAudit(serverAudit, fullAudit, logger);
 
   if (!clientPasses && !pendingOnlyFallback) {
+    const serverEntries = entriesOf(serverAudit);
+    const clientEntries = entriesOf(clientAudit);
     const clientId = (clientAudit as AnyAuditOf<T>).id;
-    logger?.debug(
-      `[merge-diag] client audit rejected by isAudit(fullAudit=${fullAudit}) — keeping server entries only`,
-      {
-        recordId: clientId.slice(0, 8),
-        serverEntryCount: entriesOf(serverAudit).length,
-        clientEntryCount: entriesOf(clientAudit).length,
-        clientTypes: entriesOf(clientAudit).map(e => e.type),
-        clientSummary: entryTypeSummary(entriesOf(clientAudit)),
-      },
-    );
+
+    // Guard against data loss: if the server audit is empty (corrupt / missing entries)
+    // but the client has entries, preserve the client data rather than discarding it.
+    if (serverEntries.length === 0 && clientEntries.length > 0) {
+      logger?.error('[auditor] merge: server audit has 0 entries — adopting client entries', {
+        recordId: clientId,
+        clientEntryCount: clientEntries.length,
+        clientSummary: entryTypeSummary(clientEntries),
+      });
+      return withEntries(serverAudit, clientEntries);
+    }
+
+    if (isPendingOnly) {
+      // Fallback failed because serverAudit is itself invalid — surface that reason now.
+      isAudit(clientAudit, fullAudit, logger);
+      isAudit(serverAudit, fullAudit, logger);
+    }
+    logger?.debug('[auditor] merge: client rejected, keeping server entries', {
+      recordId: clientId,
+      serverEntries: serverEntries.length,
+      clientEntries: clientEntries.length,
+      clientSummary: entryTypeSummary(clientEntries),
+    });
     return serverAudit;
   }
 
   if (pendingOnlyFallback) {
-    const clientIdPending = (clientAudit as AnyAuditOf<T>).id;
-    logger?.debug(
-      '[merge-diag] client pending-only audit — merging into server full audit',
-      {
-        recordId: clientIdPending.slice(0, 8),
-        serverEntryCount: entriesOf(serverAudit).length,
-        clientEntryCount: entriesOf(clientAudit).length,
-        clientSummary: entryTypeSummary(entriesOf(clientAudit)),
-      },
-    );
+    logger?.debug('[auditor] merge: client pending-only — merging into server audit', {
+      recordId: (clientAudit as AnyAuditOf<T>).id,
+      serverEntries: entriesOf(serverAudit).length,
+      clientEntries: entriesOf(clientAudit).length,
+      clientSummary: entryTypeSummary(entriesOf(clientAudit)),
+    });
   }
 
   const existingIds = new Set(entriesOf(serverAudit).map(e => e.id));
@@ -355,7 +376,6 @@ export function merge<T extends MXDBRecord>(
     if (e.type === AuditEntryType.Branched || e.type === AuditEntryType.Created) continue;
     if (existingIds.has(e.id)) {
       duplicateCount += 1;
-      logger?.debug(`[auditor] §6.9#8 duplicate entry id "${e.id}" — keeping existing`);
       continue;
     }
     newEntries.push(e);
@@ -365,11 +385,14 @@ export function merge<T extends MXDBRecord>(
     a.id < b.id ? -1 : a.id > b.id ? 1 : 0,
   );
 
-  const mergedDiag =
-    `[merge-diag] merged record="${serverAudit.id.slice(0, 8)}" `
-    + `server=${entriesOf(serverAudit).length} clientNonIgnored=${newEntries.length + duplicateCount} `
-    + `appended=${newEntries.length} duplicatesSkipped=${duplicateCount} total=${merged.length}`;
-  logger?.debug(mergedDiag, { mergedSummary: entryTypeSummary(merged) });
+  logger?.debug('[auditor] merge complete', {
+    recordId: serverAudit.id,
+    server: entriesOf(serverAudit).length,
+    appended: newEntries.length,
+    duplicatesSkipped: duplicateCount,
+    total: merged.length,
+    summary: entryTypeSummary(merged),
+  });
 
   return withEntries(serverAudit, merged);
 }
@@ -415,11 +438,7 @@ export function isDeleted<T extends MXDBRecord>(audit: AnyAuditOf<T>): boolean {
   if (!isAuditDocument(audit)) return false;
   // Delete-is-final: find the latest Deleted or Restored entry by ULID order. Updates after
   // a Delete (higher ULIDs, still appended to the audit because merge does not prune them)
-  // must NOT flip the tombstone state — only a subsequent Restored can. Previously this
-  // scanned the array in insertion order and returned the last non-Branched entry, which
-  // silently resurrected tombstoned records whenever a post-delete Update merged in and
-  // caused `#buildAndPush` to bypass the §10.1 filter and push a stale cursor to a client
-  // that had branched at an earlier entry.
+  // must NOT flip the tombstone state — only a subsequent Restored can.
   let latestTransition: { type: AuditEntryType; id: string } | undefined;
   for (const e of entriesOf(audit)) {
     if (e.type !== AuditEntryType.Deleted && e.type !== AuditEntryType.Restored) continue;
@@ -455,9 +474,7 @@ export function getLastEntryTimestamp<T extends MXDBRecord>(audit: AnyAuditOf<T>
   }
 }
 
-/**
- * §6.3 — Rebase `userRecord` local edits on top of `newServerRecord`.
- */
+/** Rebase `userRecord` local edits on top of `newServerRecord`. */
 export function rebaseRecord<T extends MXDBRecord>(
   oldServerRecord: T,
   userRecord: T,
@@ -469,5 +486,7 @@ export function rebaseRecord<T extends MXDBRecord>(
   for (const op of localOps) {
     applyOp(result, op);
   }
-  return result;
+  // Deserialise after applying ops so rich types (Luxon DateTime etc.) are
+  // restored from ISO strings back to their in-memory forms.
+  return to.deserialise<T>(to.serialise(result));
 }

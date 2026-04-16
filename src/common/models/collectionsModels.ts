@@ -29,7 +29,7 @@ export interface MXDBCollection<RecordType extends Record = any> {
 
 export type UseCollection = UseSeedCollection;
 
-// §7.2 — recursive dot-notation key path type
+// Recursive dot-notation key path type
 type NestedKeyOf<T> =
   T extends object
     ? { [K in keyof T & string]: K | `${K}.${NestedKeyOf<T[K]>}` }[keyof T & string]
@@ -42,14 +42,14 @@ export interface MXDBCollectionIndex<RecordType extends Record = Record> {
   isSparse?: boolean;
 }
 
-/** §4.5 — How the collection is synchronised between client and server */
+/** How the collection is synchronised between client and server */
 export type MXDBSyncMode = 'Synchronised' | 'ServerOnly' | 'ClientOnly';
 
 export interface MXDBCollectionConfig<RecordType extends Record = any> {
   name: string;
   indexes: MXDBCollectionIndex<RecordType>[];
   /**
-   * §4.5 — Default: 'Synchronised'.
+   * Default: 'Synchronised'.
    * - 'Synchronised': exists on both client and server, kept in sync.
    * - 'ServerOnly': no client-side storage; never synced to clients.
    * - 'ClientOnly': no server-side storage; never synced to server.
@@ -62,7 +62,7 @@ export interface MXDBCollectionConfig<RecordType extends Record = any> {
   disableAudit?: boolean;
 }
 
-// ─── §7.6 Error types ───────────────────────────────────────────────────────
+// ─── Error types ────────────────────────────────────────────────────────────
 
 export type MXDBErrorSeverity = 'warning' | 'error' | 'fatal';
 
@@ -95,13 +95,13 @@ export interface MXDBError {
   originalError?: unknown;
 }
 
-// ─── §7.3 Unified collection change event ───────────────────────────────────
+// ─── Unified collection change event ────────────────────────────────────────
 
 export type MXDBCollectionChangeEvent<RecordType extends Record = Record> =
   | { type: 'upsert'; records: RecordType[] }
   | { type: 'remove'; recordIds: string[] };
 
-// ─── §7.3 Unified collection operations interface ───────────────────────────
+// ─── Unified collection operations interface ────────────────────────────────
 
 /** Shared imperative API available on both client (`useCollection`) and server (`useDb`). */
 export interface MXDBCollectionOperations<RecordType extends Record> {

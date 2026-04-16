@@ -28,7 +28,7 @@ export class Db {
         new DbCollection(this.#worker, this.#ready, config, auditorLogger),
       ]),
     );
-    // §4.9: Reload the affected collection whenever another tab writes to it
+    // Reload the affected collection whenever another tab writes to it
     this.#worker.setOnExternalChange(collectionName => {
       this.#collections.get(collectionName)?.reloadFromWorker();
     });
@@ -58,7 +58,7 @@ export class Db {
     await this.#worker.close();
   }
 
-  // ─── §4.4 Auth token persistence (internal mxdb_authentication table) ───────
+  // ─── Auth token persistence (internal mxdb_authentication table) ────────────
 
   /** Read the stored auth credentials, or undefined if not yet stored. */
   public async readAuth(): Promise<{ token: string; keyHash: string } | undefined> {

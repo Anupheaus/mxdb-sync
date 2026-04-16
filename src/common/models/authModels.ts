@@ -1,4 +1,4 @@
-// ─── §4.4 Auth models (shared between client and server) ─────────────────────
+// ─── Auth models (shared between client and server) ──────────────────────────
 
 import type { Record } from '@anupheaus/common';
 

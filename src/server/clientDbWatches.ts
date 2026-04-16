@@ -8,12 +8,12 @@ import type { Unsubscribe } from '@anupheaus/common';
 const clientWatchSubscriptions = new WeakMap<Socket, Unsubscribe>();
 
 /**
- * §2.4 — Feed MongoDB change-stream events into the per-connection
+ * Feed MongoDB change-stream events into the per-connection
  * {@link ServerToClientSynchronisation}. The wrapper forwards events to the
  * underlying {@link ServerDispatcher}, which handles filter bookkeeping,
  * retry, and delivery.
  *
- * §10.1 — Tombstone filtering happens inside `s2c.onDbChange`, not here.
+ * Tombstone filtering happens inside `s2c.onDbChange`, not here.
  * This function passes all change events through verbatim; the S2C wrapper
  * consults the auditor to drop any upserts whose audit shows a tombstoned
  * record so that resurrection pushes never reach SD/CR.

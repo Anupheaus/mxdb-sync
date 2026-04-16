@@ -123,9 +123,19 @@ export class ClientToServerSynchronisation {
   #collectAllStatesForOnStart(): MXDBRecordStates {
     const db = this.#getDb();
     const out: MXDBRecordStates = [];
+    const empty: string[] = [];
     for (const collection of this.#collections) {
       const records = db.use(collection.name).getAllStatesSync();
-      if (records.length > 0) out.push({ collectionName: collection.name, records });
+      if (records.length > 0) {
+        out.push({ collectionName: collection.name, records });
+      } else {
+        empty.push(collection.name);
+      }
+    }
+    if (empty.length > 0) {
+      this.#logger.debug(
+        `[C2S] onStart skipping ${empty.length} empty collection(s) (no local records to sync): ${empty.join(', ')}`,
+      );
     }
     return out;
   }
@@ -147,7 +157,11 @@ export class ClientToServerSynchronisation {
       try {
         collection = db.use(item.collectionName);
       } catch {
-        this.#logger.warn('[C2S] onUpdate received unknown collection', { collectionName: item.collectionName });
+        this.#logger.warn('[C2S] onUpdate received unknown collection — skipping', {
+          collectionName: item.collectionName,
+          successfulRecords: item.records?.length ?? 0,
+          deletedRecords: item.deletedRecordIds?.length ?? 0,
+        });
         continue;
       }
       // Successful active records → collapse local audit to the server-confirmed anchor.
@@ -158,15 +172,19 @@ export class ClientToServerSynchronisation {
       }
       // Successful deletes → collapse the tombstone audit to a Branched anchor at
       // the Deleted entry's ULID so that a subsequent onStart sweep does not re-dispatch
-      // the same delete forever. The in-memory record stays absent (already removed by
-      // the local delete() that triggered the enqueue), and the collapsed branch-only
-      // audit still registers as a tombstone for CR's delete-is-final check.
+      // the same delete forever. Then call applyServerDeleteSync to wipe the tombstone
+      // audit from memory and SQLite: since pending changes have just been sent and the
+      // server confirmed the delete, the collapsed audit has no pending entries
+      // (hasPendingChanges → false), so applyServerDeleteSync takes the fullyRemoved path
+      // and cleans up. Without this second step the tombstone persists indefinitely
+      // because no further S2C delete event arrives after the CD success path.
       for (const id of item.deletedRecordIds ?? []) {
         const states = collection.getStatesSync([id]);
         if (states.length === 0) continue;
         const anchor = auditor.getLastEntryId({ id, entries: states[0].audit });
         if (anchor == null) continue;
         collection.collapseAuditSync(id, anchor);
+        collection.applyServerDeleteSync([id]);
       }
     }
   }

@@ -27,7 +27,7 @@ describe('buildTableDDL', () => {
   it('produces audit table and index for audited collection', () => {
     const stmts = buildTableDDL('todos', [], true);
     expect(stmts.some(s => s.includes(`todos${AUDIT_TABLE_SUFFIX}`) && s.includes('recordId TEXT NOT NULL'))).toBe(true);
-    expect(stmts.some(s => s.includes('idx_todos_audit_by_record') && s.includes(`todos${AUDIT_TABLE_SUFFIX}(recordId, id)`))).toBe(true);
+    expect(stmts.some(s => s.includes('idx_todos_audit_by_record') && s.includes(`"todos${AUDIT_TABLE_SUFFIX}"(recordId, id)`))).toBe(true);
   });
 
   it('does not produce legacy _sync dirty table (unified audit table for all collections)', () => {

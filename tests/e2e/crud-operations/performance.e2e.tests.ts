@@ -17,23 +17,23 @@ import { connectBoth, newRecordId } from './utils';
 
 const THRESHOLDS = {
   /** Time to mount a client and establish a socket connection (ms). */
-  clientConnect: 15_000,
+  clientConnect: 1_000,
   /** Per-record write time budget when upserting N records sequentially (ms). */
-  upsertPerRecord: 500,
+  upsertPerRecord: 50,
   /** Per-record time budget when reading N records back from local SQLite (ms). */
-  readLocalPerRecord: 50,
+  readLocalPerRecord: 5,
   /** Per-record time budget when updating N records sequentially (ms). */
-  updatePerRecord: 500,
+  updatePerRecord: 50,
   /** Per-record time budget when deleting N records sequentially (ms). */
-  deletePerRecord: 500,
+  deletePerRecord: 50,
   /** Total time for N records to propagate from one client to another after sync (ms). */
-  syncPropagationTotal: 30_000,
+  syncPropagationTotal: 3_000,
   /** Time for a client to reconnect and fully sync a queue of N records (ms). */
-  offlineSyncTotal: 60_000,
+  offlineSyncTotal: 10_000,
   /** Time to read all live records from the server Mongo collection (ms). */
-  serverReadAll: 10_000,
+  serverReadAll: 1_000,
   /** Time to subscribe to get-all and receive the initial snapshot of N records (ms). */
-  getAllSubscription: 30_000,
+  getAllSubscription: 3_000,
 } as const;
 
 // ─── Record counts ────────────────────────────────────────────────────────────

@@ -1,6 +1,7 @@
 import { useLayoutEffect, useMemo } from 'react';
 import type { Record } from '@anupheaus/common';
 import { useSyncState } from '@anupheaus/react-ui';
+import { useSocketAPI } from '@anupheaus/socket-api/client';
 import type { DbCollection } from '../../providers';
 import type { Get } from './createGet';
 import type { MXDBError } from '../../../common';
@@ -14,6 +15,11 @@ interface State<RecordType extends Record> {
 export function createUseGet<RecordType extends Record>(collection: DbCollection<RecordType>, get: Get<RecordType>) {
   return (id: string | undefined) => {
     const { setState, getState } = useSyncState<State<RecordType>>(() => ({ record: undefined, isLoading: id != null, error: undefined }));
+    // Re-run the fetch effect when the socket (re)connects. Without this, an initial
+    // get() call that runs while the socket is still handshaking silently returns
+    // no record (createGet falls through its `getIsConnected()` gate) and useGet
+    // parks at { record: undefined, isLoading: false } forever.
+    const { isConnected } = useSocketAPI();
 
     useMemo(() => {
       const state = getState();
@@ -37,8 +43,14 @@ export function createUseGet<RecordType extends Record>(collection: DbCollection
           if (currentState.record?.id === id) return;
 
           setState(s => ({ ...s, isLoading: true }));
-          const record = await get(id);
-          setState({ record, isLoading: false, error: undefined });
+          try {
+            const record = await get(id);
+            setState({ record, isLoading: false, error: undefined });
+          } catch (error) {
+            // eslint-disable-next-line no-console
+            console.error('[MXDB-Sync] createUseGet: get() threw an error for id', id, error);
+            setState(s => ({ ...s, isLoading: false, error: error as MXDBError }));
+          }
         }
       })();
 
@@ -58,7 +70,7 @@ export function createUseGet<RecordType extends Record>(collection: DbCollection
           }
         }
       });
-    }, [id]);
+    }, [id, isConnected]);
 
     return getState();
   };

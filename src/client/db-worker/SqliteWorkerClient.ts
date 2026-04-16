@@ -55,6 +55,10 @@ class InlineRunner {
     return rows;
   }
 
+  queryMulti(queries: Array<{ sql: string; params?: unknown[] }>): Record<string, unknown>[][] {
+    return queries.map(({ sql, params }) => this.query(sql, params));
+  }
+
   close(): void {
     this.#db?.close();
     this.#db = null;
@@ -240,6 +244,15 @@ export class SqliteWorkerClient {
       return this.#inlineRunner!.query(sql, params) as T[];
     }
     return this.#send<T[]>({ type: 'query', correlationId: ulid(), sql, params });
+  }
+
+  async queryMulti<T extends object = Record<string, unknown>>(
+    queries: Array<{ sql: string; params?: unknown[] }>,
+  ): Promise<T[][]> {
+    if (this.#mode === 'inline') {
+      return this.#inlineRunner!.queryMulti(queries) as T[][];
+    }
+    return this.#send<T[][]>({ type: 'query-multi', correlationId: ulid(), queries });
   }
 
   async close(): Promise<void> {

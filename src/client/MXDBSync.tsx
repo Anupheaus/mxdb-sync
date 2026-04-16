@@ -37,7 +37,7 @@ export const MXDBSync = createComponent('MXDBSync', ({
     }
   }
 
-  useEffect(() => { setupBrowserTools(); }, []);
+  useEffect(() => { setupBrowserTools(name); }, []);
 
   const conflictResolutionContext = useMemo(() => ({ onConflictResolution }), [onConflictResolution]);
 

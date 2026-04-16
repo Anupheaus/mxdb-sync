@@ -83,7 +83,10 @@ export const clientToServerSyncAction = createServerActionHandler(
           let collection: ReturnType<typeof db.use>;
           try { collection = db.use(item.collectionName); }
           catch {
-            logger.warn(`C2S onRetrieve: unknown collection "${item.collectionName}" — skipping`);
+            logger.warn('C2S onRetrieve: unknown collection — skipping', {
+              collectionName: item.collectionName,
+              recordCount: item.recordIds.length,
+            });
             return;
           }
           if (item.recordIds.length === 0) return;

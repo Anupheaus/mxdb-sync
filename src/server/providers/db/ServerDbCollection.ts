@@ -110,7 +110,11 @@ export class ServerDbCollection<RecordType extends Record = Record> {
       const startTime = performance.now();
       const rawDocs = await collection.find().sort({ $natural: 1 }).toArray();
       const endTime = performance.now();
-      if (endTime - startTime >= slowQueryThreshold) this.#logger.warn(`Slow query on "${collection.collectionName}"`, { duration: endTime - startTime });
+      if (endTime - startTime >= slowQueryThreshold) this.#logger.warn('Slow query (full scan)', {
+        collectionName: collection.collectionName,
+        durationMs: Math.round(endTime - startTime),
+        recordCount: rawDocs.length,
+      });
       const data = rawDocs.mapWithoutNull(dbUtils.deserialize);
       return { data, total: data.length };
     } else {
@@ -118,7 +122,11 @@ export class ServerDbCollection<RecordType extends Record = Record> {
         const startTime = performance.now();
         const result = this.#parseFilters(request!.filters);
         const endTime = performance.now();
-        if (endTime - startTime >= slowFilterParseThreshold) this.#logger.warn(`Slow filter parse on "${collection.collectionName}"`, { duration: endTime - startTime });
+        if (endTime - startTime >= slowFilterParseThreshold) this.#logger.warn('Slow filter parse', {
+          collectionName: collection.collectionName,
+          durationMs: Math.round(endTime - startTime),
+          filterKeyCount: Object.keys(request!.filters ?? {}).length,
+        });
         return result;
       })() : undefined;
 
@@ -128,7 +136,15 @@ export class ServerDbCollection<RecordType extends Record = Record> {
       const startTime = performance.now();
       const rawDocs = await collection.find(filters ?? {}, { sort, skip: offset, limit }).sort({ $natural: 1 }).toArray();
       const endTime = performance.now();
-      if (endTime - startTime >= slowQueryThreshold) this.#logger.warn(`Slow query on "${collection.collectionName}"`, { duration: endTime - startTime });
+      if (endTime - startTime >= slowQueryThreshold) this.#logger.warn('Slow query', {
+        collectionName: collection.collectionName,
+        durationMs: Math.round(endTime - startTime),
+        recordCount: rawDocs.length,
+        hasFilters: filters != null,
+        hasSort: sort != null,
+        limit,
+        offset,
+      });
       const data = rawDocs.mapWithoutNull(dbUtils.deserialize);
       let total = data.length;
       if (request.getAccurateTotal === true) total = await collection.countDocuments(filters);
@@ -274,11 +290,12 @@ export class ServerDbCollection<RecordType extends Record = Record> {
         }
         return { id: record.id };
       } catch (err) {
-        this.#logger.error(`§6.9#15 Permanent write failure for "${record.id}" in "${this.#collection.name}"`, {
+        this.#logger.error('Permanent write failure (upsert)', {
+          collectionName: this.#collection.name,
           recordId: record.id,
+          txnAttempts,
           error: err instanceof Error ? err.message : String(err),
           stack: err instanceof Error ? err.stack : undefined,
-          txnAttempts,
         });
         return { id: record.id, error: err instanceof Error ? err.message : String(err) };
       } finally {
@@ -354,11 +371,12 @@ export class ServerDbCollection<RecordType extends Record = Record> {
         }
         return { id };
       } catch (err) {
-        this.#logger.error(`§6.9#15 Permanent delete failure for "${id}" in "${this.#collection.name}"`, {
+        this.#logger.error('Permanent write failure (delete)', {
+          collectionName: this.#collection.name,
           recordId: id,
+          txnAttempts,
           error: err instanceof Error ? err.message : String(err),
           stack: err instanceof Error ? err.stack : undefined,
-          txnAttempts,
         });
         return { id, error: err instanceof Error ? err.message : String(err) };
       } finally {
@@ -408,15 +426,23 @@ export class ServerDbCollection<RecordType extends Record = Record> {
         const isSessionEnded = errAny?.name === 'MongoExpiredSessionError'
           || /Cannot use a session that has ended/i.test(String(errAny?.message ?? ''));
         if (isSessionEnded) {
-          this.#logger.warn(`§6.9#14 Session ended for "${recordId}" — not retryable (server shutting down?)`, errDetails);
+          this.#logger.warn('Session ended mid-write — not retryable (server shutting down?)', {
+            collectionName: this.#collection.name, recordId, ...errDetails,
+          });
           throw err;
         }
         if (attempt >= SYNC_MAX_RETRIES) {
-          this.#logger.error(`§6.9#14 Final transient write failure for "${recordId}" after ${attempt} attempts (attemptMs=${attemptMs})`, errDetails);
+          this.#logger.error('Final transient write failure after all retries', {
+            collectionName: this.#collection.name, recordId, attempts: attempt, attemptMs, ...errDetails,
+          });
           throw err;
         }
         const delayMs = Math.min(SYNC_RETRY_MAX_DELAY_MS, SYNC_RETRY_BASE_DELAY_MS * 2 ** (attempt - 1));
-        this.#logger.warn(`§6.9#14 Transient write failure for "${recordId}" (attempt ${attempt}/${SYNC_MAX_RETRIES}, attemptMs=${attemptMs}), retrying in ${delayMs}ms`, errDetails);
+        this.#logger.warn('Transient write failure — retrying', {
+          collectionName: this.#collection.name, recordId,
+          attempt, maxAttempts: SYNC_MAX_RETRIES, attemptMs, nextRetryMs: delayMs,
+          ...errDetails,
+        });
         await new Promise<void>(resolve => setTimeout(resolve, delayMs));
       }
     }

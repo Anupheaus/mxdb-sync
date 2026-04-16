@@ -29,6 +29,8 @@ export class ClientDispatcher {
   #timer: ReturnType<typeof setTimeout> | undefined = undefined;
   #timerResolve: (() => void) | undefined = undefined;
   #queue: ClientDispatcherEnqueueItem[] = [];
+  // Shadow Set<"collectionName:recordId"> for O(1) existence checks on #queue.
+  #queueSet = new Set<string>();
   #pendingReEnqueue = new Set<string>(); // "collectionName:recordId" keys
   #epoch = 0;
 
@@ -40,22 +42,21 @@ export class ClientDispatcher {
 
   enqueue(item: ClientDispatcherEnqueueItem): void {
     if (!this.#started) return;
+    const key = `${item.collectionName}:${item.recordId}`;
     // If already in queue, mark for re-enqueue after the current dispatch so that
     // updates arriving while a record is in-flight are not lost when
     // #processSuccessResponse removes the in-flight entry.
-    const exists = this.#queue.some(
-      q => q.collectionName === item.collectionName && q.recordId === item.recordId,
-    );
-    if (exists) {
+    if (this.#queueSet.has(key)) {
       // Only track for re-enqueue when in-flight. When not in-flight the existing
       // queue entry has not yet been snapshotted, so it will naturally pick up the
       // latest state when onPayloadRequest is called at dispatch time.
       if (this.#inFlight) {
-        this.#pendingReEnqueue.add(`${item.collectionName}:${item.recordId}`);
+        this.#pendingReEnqueue.add(key);
       }
       return;
     }
     this.#queue.push(item);
+    this.#queueSet.add(key);
     this.#logger.debug(`[CD] enqueued ${item.recordId} in ${item.collectionName}, queue length=${this.#queue.length}`);
     if (!this.#timer && !this.#inFlight) {
       this.#startTimer();
@@ -83,6 +84,7 @@ export class ClientDispatcher {
     this.#timerResolve?.();
     this.#timerResolve = undefined;
     this.#queue = [];
+    this.#queueSet.clear();
     this.#pendingReEnqueue.clear();
     // Reset in-flight / dispatching state here since the stale coroutine's
     // finally block will skip the reset (epoch mismatch guard).
@@ -116,8 +118,10 @@ export class ClientDispatcher {
       for (const col of states) {
         for (const s of col.records) {
           const recordId = getStateId(s);
-          if (!this.#queue.some(q => q.collectionName === col.collectionName && q.recordId === recordId)) {
+          const key = `${col.collectionName}:${recordId}`;
+          if (!this.#queueSet.has(key)) {
             this.#queue.push({ collectionName: col.collectionName, recordId });
+            this.#queueSet.add(key);
           }
         }
       }
@@ -219,6 +223,8 @@ export class ClientDispatcher {
       }
     }
     this.#queue = this.#queue.filter(q => stateKeys.has(`${q.collectionName}:${q.recordId}`));
+    // Rebuild the shadow set to match the filtered queue.
+    this.#queueSet = new Set(this.#queue.map(q => `${q.collectionName}:${q.recordId}`));
 
     // Mark in-flight BEFORE awaiting #buildRequest so that any enqueue() calls
     // during async hash computation are captured in #pendingReEnqueue.
@@ -346,6 +352,8 @@ export class ClientDispatcher {
       const successIds = successByCollection.get(q.collectionName);
       return !(successIds?.has(q.recordId));
     });
+    // Rebuild the shadow set to match the filtered queue.
+    this.#queueSet = new Set(this.#queue.map(q => `${q.collectionName}:${q.recordId}`));
 
     // Re-enqueue records that received a new update while the previous dispatch was
     // in-flight. Without this, those updates would be orphaned: enqueue() was a no-op
@@ -355,8 +363,9 @@ export class ClientDispatcher {
         const key = `${item.collectionName}:${id}`;
         if (this.#pendingReEnqueue.has(key)) {
           this.#pendingReEnqueue.delete(key);
-          if (!this.#queue.some(q => q.collectionName === item.collectionName && q.recordId === id)) {
+          if (!this.#queueSet.has(key)) {
             this.#queue.push({ collectionName: item.collectionName, recordId: id });
+            this.#queueSet.add(key);
             this.#logger.debug(`[CD] re-enqueued ${id} in ${item.collectionName} — update arrived during dispatch`);
           }
         }

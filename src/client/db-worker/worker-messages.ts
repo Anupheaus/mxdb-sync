@@ -39,6 +39,13 @@ export interface QueryRequest {
   params?: unknown[];
 }
 
+/** Run multiple SELECT queries in a single worker round-trip. Returns an array of row arrays, one per query. */
+export interface QueryMultiRequest {
+  type: 'query-multi';
+  correlationId: string;
+  queries: Array<{ sql: string; params?: unknown[] }>;
+}
+
 export interface CloseRequest {
   type: 'close';
   correlationId: string;
@@ -61,6 +68,7 @@ export type WorkerRequest =
   | ExecRequest
   | ExecBatchRequest
   | QueryRequest
+  | QueryMultiRequest
   | CloseRequest
   | ConnectRequest
   | DisconnectRequest;

@@ -1,4 +1,4 @@
-import type { Record } from '@anupheaus/common';
+import type { DataRequest, PromiseMaybe, Record } from '@anupheaus/common';
 import type { MXDBCollection } from '../../common';
 import type { UseCollection } from './useCollection';
 
@@ -37,6 +37,11 @@ export interface OnClearPayload {
   collectionName: string;
 }
 
+export interface OnQueryPayload {
+  request: DataRequest<any>;
+  userId: string | undefined;
+}
+
 export interface CollectionExtensionHooks<RecordType extends Record = Record> {
   /**
    * Runs only when this server instance performs the delete (in the action), before the write.
@@ -70,6 +75,12 @@ export interface CollectionExtensionHooks<RecordType extends Record = Record> {
   onAfterClear?(payload: OnClearPayload): Promise<void> | void;
   /** Run when seeding. Receives seedWith for this collection only; use the server's useCollection() for other collections. */
   onSeed?(seedWith: SeedWithFn<RecordType>): Promise<void>;
+  /**
+   * Run before a query is executed. Receives the request and the authenticated userId.
+   * Return a modified request to apply additional server-side filters (e.g. security scoping).
+   * Return void/undefined to use the original request unchanged.
+   */
+  onQuery?(payload: OnQueryPayload): PromiseMaybe<DataRequest<any> | void>;
 }
 
 const extensionRegistry = new WeakMap<MXDBCollection, CollectionExtensionHooks>();

@@ -21,11 +21,13 @@ import type {
   ConnectRequest,
   DisconnectRequest,
 } from './worker-messages';
+import {
+  isOpfsAvailable, flushEncrypted, openEncrypted, registerRegexp,
+  acquireDbLock, releaseDbLock,
+} from './sqlite-worker-shared';
+import type { Sqlite3, OO1Db, LockRef } from './sqlite-worker-shared';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
-
-type Sqlite3 = Awaited<ReturnType<typeof sqlite3InitModule>>;
-type OO1Db = InstanceType<Sqlite3['oo1']['DB']>;
 
 interface PortEntry {
   portId: string;
@@ -43,42 +45,11 @@ let cryptoKey: CryptoKey | null = null;
 let encryptedFileName = '';
 
 // §4.9 — exclusive Web Lock. Acquired once by the SharedWorker singleton on
-// first open; skipped on subsequent opens because lockRelease is already set.
+// first open; skipped on subsequent opens because lockRef.release is already set.
 // Prevents a second dedicated-worker tab from stealing the same OPFS file.
-let lockRelease: (() => void) | null = null;
-
-// ─── Web Lock helpers ─────────────────────────────────────────────────────────
-
-function acquireDbLock(dbName: string): Promise<boolean> {
-  if (lockRelease != null || typeof navigator === 'undefined' || navigator.locks == null) {
-    return Promise.resolve(true);
-  }
-  return new Promise(resolve => {
-    navigator.locks.request(`mxdb-db-${dbName}`, { ifAvailable: true }, lock => {
-      if (lock == null) { resolve(false); return Promise.resolve(); }
-      let release!: () => void;
-      const held = new Promise<void>(r => { release = r; });
-      lockRelease = release;
-      resolve(true);
-      return held;
-    });
-  });
-}
-
-function releaseDbLock() {
-  lockRelease?.();
-  lockRelease = null;
-}
+const lockRef: LockRef = { release: null };
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
-
-function isOpfsAvailable(): boolean {
-  try {
-    return typeof (globalThis as any).navigator?.storage?.getDirectory === 'function';
-  } catch {
-    return false;
-  }
-}
 
 function replyOn(port: MessagePort, correlationId: string, result: unknown) {
   const response: WorkerResponse = { correlationId, result };
@@ -101,82 +72,6 @@ function broadcastChange(senderPortId: string, collectionName: string) {
   }
 }
 
-// ─── REGEXP custom function ───────────────────────────────────────────────────
-
-function registerRegexp(_s3: Sqlite3, database: OO1Db) {
-  (database as any).createFunction('regexp', (_ctx: unknown, pattern: string, value: string) => {
-    try {
-      return new RegExp(pattern).test(value) ? 1 : 0;
-    } catch {
-      return 0;
-    }
-  }, { arity: 2 });
-}
-
-// ─── §4.3 Encryption helpers ──────────────────────────────────────────────────
-
-async function readAndDecryptOpfs(key: CryptoKey, fileName: string): Promise<Uint8Array | undefined> {
-  try {
-    const root = await (navigator.storage as any).getDirectory();
-    const fh = await root.getFileHandle(fileName, { create: false });
-    const file = await fh.getFile();
-    const buf = await file.arrayBuffer();
-    if (buf.byteLength <= 12) return undefined;
-    const iv = new Uint8Array(buf, 0, 12);
-    const ciphertext = new Uint8Array(buf, 12);
-    const plain = await crypto.subtle.decrypt({ name: 'AES-GCM', iv }, key, ciphertext);
-    return new Uint8Array(plain);
-  } catch {
-    return undefined;
-  }
-}
-
-async function flushEncrypted(s3: Sqlite3, database: OO1Db): Promise<void> {
-  if (!cryptoKey || !isOpfsAvailable()) return;
-  const dbBytes: Uint8Array = (s3.capi as any).sqlite3_js_db_export(database.pointer, 'main');
-  const iv = crypto.getRandomValues(new Uint8Array(12));
-  const dbBuf: ArrayBuffer = dbBytes.buffer.slice(dbBytes.byteOffset, dbBytes.byteOffset + dbBytes.byteLength) as ArrayBuffer;
-  const ciphertext = await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, cryptoKey, dbBuf);
-  const out = new Uint8Array(12 + ciphertext.byteLength);
-  out.set(iv, 0);
-  out.set(new Uint8Array(ciphertext), 12);
-  const root = await (navigator.storage as any).getDirectory();
-  const fh = await root.getFileHandle(encryptedFileName, { create: true });
-  const writable = await (fh as any).createWritable({ keepExistingData: false });
-  try {
-    await writable.write(out);
-  } finally {
-    await writable.close();
-  }
-}
-
-async function openEncrypted(s3: Sqlite3, dbName: string, keyBytes: Uint8Array): Promise<OO1Db> {
-  const keyBuf: ArrayBuffer = keyBytes.buffer.slice(keyBytes.byteOffset, keyBytes.byteOffset + keyBytes.byteLength) as ArrayBuffer;
-  cryptoKey = await crypto.subtle.importKey('raw', keyBuf, 'AES-GCM', false, ['encrypt', 'decrypt']);
-  encryptedFileName = `${dbName}.enc`;
-
-  const existingBytes = isOpfsAvailable()
-    ? await readAndDecryptOpfs(cryptoKey, encryptedFileName)
-    : undefined;
-
-  const newDb = new s3.oo1.DB(':memory:', 'ct');
-
-  if (existingBytes != null) {
-    const pData = (s3.wasm as any).allocFromTypedArray(existingBytes);
-    const rc = (s3.capi as any).sqlite3_deserialize(
-      newDb.pointer, 'main', pData,
-      existingBytes.byteLength, existingBytes.byteLength,
-      1 | 2, // SQLITE_DESERIALIZE_FREEONCLOSE | SQLITE_DESERIALIZE_RESIZEABLE
-    );
-    if (rc !== 0) {
-      (s3.wasm as any).dealloc(pData);
-      throw new Error(`sqlite3_deserialize failed with code ${rc}`);
-    }
-  }
-
-  return newDb;
-}
-
 // ─── Operation handlers ───────────────────────────────────────────────────────
 
 async function handleOpen(
@@ -187,7 +82,7 @@ async function handleOpen(
   correlationId: string,
 ) {
   try {
-    const acquired = await acquireDbLock(dbName);
+    const acquired = await acquireDbLock(dbName, lockRef);
     if (!acquired) {
       replyErrorOn(port, correlationId, new Error(`Database "${dbName}" is already open in another context.`));
       return;
@@ -201,7 +96,7 @@ async function handleOpen(
     }
 
     if (db) {
-      if (cryptoKey && sqlite3) await flushEncrypted(sqlite3, db);
+      if (cryptoKey) await flushEncrypted(sqlite3!, db, cryptoKey, encryptedFileName);
       db.close();
       db = null;
       cryptoKey = null;
@@ -209,7 +104,10 @@ async function handleOpen(
     }
 
     if (encryptionKey != null && encryptionKey.byteLength > 0) {
-      db = await openEncrypted(sqlite3!, dbName, encryptionKey);
+      const opened = await openEncrypted(sqlite3!, dbName, encryptionKey);
+      db = opened.db;
+      cryptoKey = opened.cryptoKey;
+      encryptedFileName = opened.encryptedFileName;
     } else if (isOpfsAvailable() && sqlite3!.oo1.OpfsDb != null) {
       db = new sqlite3!.oo1.OpfsDb(`${dbName}.sqlite3`, 'ct');
     } else {
@@ -224,7 +122,7 @@ async function handleOpen(
       }
     });
 
-    if (cryptoKey && sqlite3) await flushEncrypted(sqlite3, db);
+    if (cryptoKey && sqlite3) await flushEncrypted(sqlite3, db!, cryptoKey, encryptedFileName);
 
     replyOn(port, correlationId, null);
   } catch (err) {
@@ -243,7 +141,7 @@ async function handleExec(
   try {
     if (!db || !sqlite3) throw new Error('Database not open');
     db.exec({ sql, bind: (params ?? []) as any });
-    if (cryptoKey) await flushEncrypted(sqlite3, db);
+    if (cryptoKey) await flushEncrypted(sqlite3, db, cryptoKey, encryptedFileName);
     replyOn(port, correlationId, null);
     if (collectionHint) broadcastChange(senderPortId, collectionHint);
   } catch (err) {
@@ -265,7 +163,7 @@ async function handleExecBatch(
         tx.exec({ sql, bind: (params ?? []) as any });
       }
     });
-    if (cryptoKey) await flushEncrypted(sqlite3, db);
+    if (cryptoKey) await flushEncrypted(sqlite3, db, cryptoKey, encryptedFileName);
     replyOn(port, correlationId, null);
     if (collectionHint) broadcastChange(senderPortId, collectionHint);
   } catch (err) {
@@ -294,14 +192,37 @@ function handleQuery(
   }
 }
 
+function handleQueryMulti(
+  port: MessagePort,
+  queries: Array<{ sql: string; params?: unknown[] }>,
+  correlationId: string,
+) {
+  try {
+    if (!db) throw new Error('Database not open');
+    const results = queries.map(({ sql, params }) => {
+      const rows: Record<string, unknown>[] = [];
+      db!.exec({
+        sql,
+        bind: (params ?? []) as any,
+        rowMode: 'object',
+        callback: (row: Record<string, unknown>) => { rows.push(row); },
+      });
+      return rows;
+    });
+    replyOn(port, correlationId, results);
+  } catch (err) {
+    replyErrorOn(port, correlationId, err);
+  }
+}
+
 async function handleClose(port: MessagePort, correlationId: string) {
   try {
-    if (db && sqlite3 && cryptoKey) await flushEncrypted(sqlite3, db);
+    if (db && sqlite3 && cryptoKey) await flushEncrypted(sqlite3, db, cryptoKey, encryptedFileName);
     db?.close();
     db = null;
     cryptoKey = null;
     encryptedFileName = '';
-    releaseDbLock();
+    releaseDbLock(lockRef);
     replyOn(port, correlationId, null);
   } catch (err) {
     replyErrorOn(port, correlationId, err);
@@ -339,6 +260,9 @@ function dispatchMessage(port: MessagePort, senderPortId: string, data: WorkerRe
       break;
     case 'query':
       handleQuery(port, data.sql, data.params, data.correlationId);
+      break;
+    case 'query-multi':
+      handleQueryMulti(port, data.queries, data.correlationId);
       break;
     case 'close':
       void handleClose(port, data.correlationId);

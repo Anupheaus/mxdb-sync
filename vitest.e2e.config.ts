@@ -4,8 +4,12 @@ import fs from 'fs';
 import { vitestE2eTlsEnv } from './tests/e2e/setup/vitestTlsEnv';
 
 const localAlias = (relDir: string) => {
-  const resolved = path.resolve(__dirname, relDir);
-  return fs.existsSync(resolved) ? resolved : undefined;
+  const relative = path.resolve(__dirname, relDir);
+  if (fs.existsSync(relative)) return relative;
+  // Fallback for git worktrees where __dirname is .worktrees/<branch>/
+  const segments = relDir.replace(/^\.\.\//, '').split('/');
+  const absolute = path.resolve('C:/code/personal', ...segments);
+  return fs.existsSync(absolute) ? absolute : undefined;
 };
 
 const alias: Record<string, string> = {

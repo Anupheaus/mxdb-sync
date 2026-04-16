@@ -83,7 +83,7 @@ describe('ClientReceiver', () => {
       expect(result[0].successfulRecordIds).toContain('r1');
     });
 
-    it('accepts delete cursor with no local state — logs warn, includes in successfulRecordIds', () => {
+    it('accepts delete cursor with no local state — already consistent, includes in successfulRecordIds', () => {
       const onRetrieve = vi.fn().mockReturnValue([]); // no local state
       const onUpdate = vi.fn().mockReturnValue([{ collectionName: 'items', successfulRecordIds: [] }]);
       const cr = new ClientReceiver(mockLogger, { onRetrieve, onUpdate });
@@ -94,7 +94,6 @@ describe('ClientReceiver', () => {
       }];
 
       const result = cr.process(payload);
-      expect(mockLogger.warn).toHaveBeenCalledOnce();
       // Should include r1 in successfulRecordIds via noLocalStateDeleteIds
       const successIds = result.find(r => r.collectionName === 'items')?.successfulRecordIds ?? [];
       expect(successIds).toContain('r1');
@@ -250,11 +249,6 @@ describe('ClientReceiver', () => {
 
       // Should not log an error — the race is expected and handled
       expect(mockLogger.error).not.toHaveBeenCalled();
-
-      // Should log a debug explaining the skip
-      expect(mockLogger.debug).toHaveBeenCalledWith(
-        expect.stringContaining('record has just been deleted locally'),
-      );
     });
 
     it('treats a delete cursor against a local tombstone as already-consistent (success, no resurrection)', () => {

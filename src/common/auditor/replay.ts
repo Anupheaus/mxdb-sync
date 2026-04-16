@@ -172,7 +172,13 @@ export function replayHistoryEndState<T extends MXDBRecord>(
   logger?: Logger,
 ): ReplayEndState<T> {
   const clean = filterValidEntries<T>(entries as unknown as unknown[], logger);
-  const sorted = [...clean].sort((a, b) => a.id < b.id ? -1 : a.id > b.id ? 1 : 0);
+  // Audit entries are appended in ULID-monotonic order in the common case; avoid
+  // the O(n log n) sort + array copy when entries are already in order.
+  let needsSort = false;
+  for (let i = 1; i < clean.length; i++) {
+    if (clean[i].id < clean[i - 1].id) { needsSort = true; break; }
+  }
+  const sorted = needsSort ? [...clean].sort((a, b) => a.id < b.id ? -1 : a.id > b.id ? 1 : 0) : clean;
 
   let live: T | undefined = baseRecord;
   let shadow: T | undefined = baseRecord;

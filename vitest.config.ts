@@ -3,8 +3,15 @@ import path from 'path';
 import fs from 'fs';
 
 const localAlias = (relDir: string, ...parts: string[]) => {
-  const resolved = path.resolve(__dirname, relDir);
-  return fs.existsSync(resolved) ? path.resolve(resolved, ...parts) : undefined;
+  // Try relative to this config file first (works in the main repo).
+  // Then fall back to C:/code/personal/<package>/<subdir> so git worktrees
+  // (which live at .worktrees/<branch>/) also resolve correctly.
+  const relative = path.resolve(__dirname, relDir);
+  if (fs.existsSync(relative)) return path.resolve(relative, ...parts);
+  // e.g. relDir = '../react-ui/src' → package = 'react-ui', subdir = 'src'
+  const segments = relDir.replace(/^\.\.\//, '').split('/');
+  const absolute = path.resolve('C:/code/personal', ...segments);
+  return fs.existsSync(absolute) ? path.resolve(absolute, ...parts) : undefined;
 };
 
 const alias: Record<string, string> = {

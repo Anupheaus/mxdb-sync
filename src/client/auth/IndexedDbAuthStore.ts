@@ -30,11 +30,31 @@ export function isIndexedDbAvailable(): boolean {
 
 function openIdb(appName: string): Promise<IDBDatabase> {
   return new Promise((resolve, reject) => {
-    const req = indexedDB.open(appName, 1);
-    req.onupgradeneeded = () =>
-      req.result.createObjectStore(IDB_STORE, { keyPath: 'id' });
-    req.onsuccess = () => resolve(req.result);
+    // Open without a version to avoid VersionError on any existing DB version.
+    const req = indexedDB.open(appName);
+    req.onupgradeneeded = () => {
+      // Only fires for brand-new DBs — create the store.
+      if (!req.result.objectStoreNames.contains(IDB_STORE))
+        req.result.createObjectStore(IDB_STORE, { keyPath: 'id' });
+    };
     req.onerror = () => reject(req.error);
+    req.onsuccess = () => {
+      const db = req.result;
+      if (db.objectStoreNames.contains(IDB_STORE)) {
+        resolve(db);
+      } else {
+        // DB exists at some version but the store is missing — upgrade to add it.
+        const nextVersion = db.version + 1;
+        db.close();
+        const upgradeReq = indexedDB.open(appName, nextVersion);
+        upgradeReq.onupgradeneeded = () => {
+          if (!upgradeReq.result.objectStoreNames.contains(IDB_STORE))
+            upgradeReq.result.createObjectStore(IDB_STORE, { keyPath: 'id' });
+        };
+        upgradeReq.onsuccess = () => resolve(upgradeReq.result);
+        upgradeReq.onerror = () => reject(upgradeReq.error);
+      }
+    };
   });
 }
 

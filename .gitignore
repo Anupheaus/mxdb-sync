@@ -35,3 +35,6 @@ tests/e2e/setup/certs/
 
 # Claude Code session files
 .claude
+
+# Git worktrees
+.worktrees

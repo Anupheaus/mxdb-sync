@@ -1,7 +1,7 @@
 import { provideDb } from './providers';
 import { Logger } from '@anupheaus/common';
 import { setAuthConfig } from './auth/authConfig';
-import { createInviteLink, getDevices, enableDevice, disableDevice } from './auth/deviceManagement';
+import { createInviteLink, getDevices, enableDevice, disableDevice, createDevToken as createDevTokenImpl } from './auth/deviceManagement';
 import { startAuthenticatedServer } from './startAuthenticatedServer';
 import type { ServerConfig, ServerInstance } from './internalModels';
 import { registerAuthInviteRoute } from './auth/registerAuthInviteRoute';
@@ -52,6 +52,9 @@ export async function startServer(config: ServerConfig): Promise<ServerInstance>
       enableDevice: async (requestId: string) => enableDevice(db, requestId),
       disableDevice: async (requestId: string) => disableDevice(db, requestId),
       close: async () => db.close(),
+      ...(process.env.NODE_ENV !== 'production' && {
+        createDevToken: async (userId: string) => createDevTokenImpl(db, userId),
+      }),
     };
   }, changeStreamDebounceMs));
 }

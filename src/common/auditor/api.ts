@@ -348,19 +348,18 @@ export function merge<T extends MXDBRecord>(
     );
   }
 
-  const ignoredTypes = new Set([AuditEntryType.Branched, AuditEntryType.Created]);
-  const clientEntries = entriesOf(clientAudit).filter(e => !ignoredTypes.has(e.type));
-
   const existingIds = new Set(entriesOf(serverAudit).map(e => e.id));
   let duplicateCount = 0;
-  const newEntries = clientEntries.filter(e => {
+  const newEntries: AuditEntry<T>[] = [];
+  for (const e of entriesOf(clientAudit)) {
+    if (e.type === AuditEntryType.Branched || e.type === AuditEntryType.Created) continue;
     if (existingIds.has(e.id)) {
       duplicateCount += 1;
       logger?.debug(`[auditor] §6.9#8 duplicate entry id "${e.id}" — keeping existing`);
-      return false;
+      continue;
     }
-    return true;
-  });
+    newEntries.push(e);
+  }
 
   const merged = [...entriesOf(serverAudit), ...newEntries].sort((a, b) =>
     a.id < b.id ? -1 : a.id > b.id ? 1 : 0,
@@ -368,7 +367,7 @@ export function merge<T extends MXDBRecord>(
 
   const mergedDiag =
     `[merge-diag] merged record="${serverAudit.id.slice(0, 8)}" `
-    + `server=${entriesOf(serverAudit).length} clientNonIgnored=${clientEntries.length} `
+    + `server=${entriesOf(serverAudit).length} clientNonIgnored=${newEntries.length + duplicateCount} `
     + `appended=${newEntries.length} duplicatesSkipped=${duplicateCount} total=${merged.length}`;
   logger?.debug(mergedDiag, { mergedSummary: entryTypeSummary(merged) });
 
@@ -442,18 +441,15 @@ export function getBranchUlid<T extends MXDBRecord>(audit: AnyAuditOf<T>): strin
 export function getLastEntryId<T extends MXDBRecord>(audit: AnyAuditOf<T>): string | undefined {
   const list = entriesOf(audit);
   if (list.length === 0) return undefined;
-  const sorted = [...list].sort((a, b) => a.id < b.id ? -1 : a.id > b.id ? 1 : 0);
-  return sorted[sorted.length - 1].id;
+  return list.reduce((max, e) => (e.id > max ? e.id : max), list[0].id);
 }
 
 /** Millisecond timestamp of the lexicographically latest audit entry (same ordering as {@link getLastEntryId}). */
 export function getLastEntryTimestamp<T extends MXDBRecord>(audit: AnyAuditOf<T>): number | undefined {
-  const list = entriesOf(audit);
-  if (list.length === 0) return undefined;
-  const sorted = [...list].sort((a, b) => a.id < b.id ? -1 : a.id > b.id ? 1 : 0);
-  const last = sorted[sorted.length - 1];
+  const id = getLastEntryId(audit);
+  if (id == null) return undefined;
   try {
-    return decodeTime(last.id);
+    return decodeTime(id);
   } catch {
     return undefined;
   }

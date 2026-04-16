@@ -1,3 +1,4 @@
+import '@anupheaus/common';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { ServerDbCollectionEvents } from './ServerDbCollectionEvents';
 import type { ServerDbChangeEvent } from './server-db-models';

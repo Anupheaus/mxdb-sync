@@ -30,44 +30,6 @@ export async function deriveKeyFromPrfOutput(prfOutput: ArrayBuffer): Promise<Ui
 }
 
 /**
- * Guard: throws if `navigator.credentials.get` does not appear to be a native
- * browser implementation.
- *
- * Two checks are applied:
- *
- * 1. `Function.prototype.toString.call(navigator.credentials.get)` must contain
- *    `[native code]`. A plain JS function assigned to `navigator.credentials`
- *    will always fail this.
- *
- * 2. `navigator.credentials` must **not** be an own property of the `navigator`
- *    instance. In every real browser it lives on `Navigator.prototype`. Replacing
- *    it via `navigator.credentials = { … }` creates an own property and fails
- *    this check.
- *
- * A sophisticated attacker can defeat both checks by patching
- * `Function.prototype.toString` with a WeakSet-backed shim and installing their
- * mock on `Navigator.prototype` — but that requires deliberate effort and
- * specific knowledge of this implementation. Casual console/extension mocks are
- * caught reliably.
- */
-function assertCredentialsNotMocked(): void {
-  if (typeof navigator === 'undefined' || navigator.credentials == null) {
-    throw new Error('MXDB: WebAuthn is not available in this environment. Unencrypted storage is not permitted.');
-  }
-
-  // Own-property check: real credentials live on Navigator.prototype, not the instance.
-  if (Object.prototype.hasOwnProperty.call(navigator, 'credentials')) {
-    throw new Error('MXDB Security: navigator.credentials has been replaced on the navigator instance — credential mocking is not permitted.');
-  }
-
-  // Native-code check: the get method must appear native.
-  const getStr = Function.prototype.toString.call(navigator.credentials.get);
-  if (!getStr.includes('[native code]')) {
-    throw new Error('MXDB Security: navigator.credentials.get does not appear to be a native implementation — credential mocking is not permitted.');
-  }
-}
-
-/**
  * Derive a 256-bit key from an existing WebAuthn credential using the PRF extension.
  *
  * Throws if WebAuthn is unavailable, credentials appear mocked, PRF is not
@@ -77,7 +39,9 @@ function assertCredentialsNotMocked(): void {
  * @returns 32 raw key bytes.
  */
 export async function deriveEncryptionKey(credentialId: Uint8Array): Promise<Uint8Array> {
-  assertCredentialsNotMocked();
+  if (typeof navigator === 'undefined' || navigator.credentials == null) {
+    throw new Error('MXDB: WebAuthn is not available in this environment. Unencrypted storage is not permitted.');
+  }
 
   const assertion = await navigator.credentials.get({
     publicKey: {

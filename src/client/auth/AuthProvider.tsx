@@ -172,16 +172,24 @@ export const AuthProvider = createComponent('AuthProvider', ({
         }
       }
 
+      let credentialIdLenForError = 0;
+      let dbNameForError: string | undefined;
       try {
         const entry = await getDefault();
         if (entry != null) {
-          logger.info('IDB entry found, deriving encryption key via WebAuthn');
+          credentialIdLenForError = entry.credentialId.byteLength;
+          dbNameForError = entry.dbName;
+          logger.info('IDB entry found, deriving encryption key via WebAuthn', { dbName: entry.dbName });
           const key = await deriveEncryptionKey(entry.credentialId);
           setDbName(entry.dbName);
           setEncryptionKey(key);
         }
       } catch (err) {
-        logger.error('Failed to derive encryption key', { error: err });
+        logger.error('Failed to derive encryption key', {
+          credentialIdLen: credentialIdLenForError,
+          dbName: dbNameForError,
+          error: err instanceof Error ? err.message : String(err),
+        });
         onError?.({
           code: 'ENCRYPTION_FAILED',
           message: err instanceof Error ? err.message : 'Failed to derive encryption key',

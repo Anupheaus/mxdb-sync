@@ -5,6 +5,7 @@ import {
   type MXDBDeletedRecordCursor,
   type MXDBSyncEngineResponse,
   type ServerDispatcherFilter,
+  type ServerDispatcherFilterRecord,
   SyncPausedError,
 } from './models';
 import { isActiveCursor, isDeletedCursor, getCursorId } from './utils';
@@ -42,7 +43,8 @@ export class ServerDispatcher {
   #inFlight = false;
   #retryTimer: ReturnType<typeof setTimeout> | undefined = undefined;
   #queue: QueuedBatch[] = [];
-  #filter: ServerDispatcherFilter[] = [];
+  // Map<collectionName, Map<recordId, FilterRecord>> — O(1) per-collection and per-record lookups.
+  #filter: Map<string, Map<string, ServerDispatcherFilterRecord>> = new Map();
   #deletedRecordIds: Map<string, Set<string>> = new Map();
 
   constructor(logger: Logger, props: ServerDispatcherProps) {
@@ -77,18 +79,16 @@ export class ServerDispatcher {
    */
   updateFilter(filters: ServerDispatcherFilter[]): void {
     for (const filterItem of filters) {
-      const existing = this.#filter.find(f => f.collectionName === filterItem.collectionName);
-      if (existing == null) {
-        this.#filter.push({
-          collectionName: filterItem.collectionName,
-          records: [...filterItem.records],
-          deletedRecordIds: filterItem.deletedRecordIds ? [...filterItem.deletedRecordIds] : undefined,
-        });
+      const colName = filterItem.collectionName;
+      let colMap = this.#filter.get(colName);
+      if (colMap == null) {
+        colMap = new Map(filterItem.records.map(r => [r.id, { ...r }]));
+        this.#filter.set(colName, colMap);
       } else {
         for (const rec of filterItem.records) {
-          const existingRec = existing.records.find(r => r.id === rec.id);
+          const existingRec = colMap.get(rec.id);
           if (existingRec == null) {
-            existing.records.push({ ...rec });
+            colMap.set(rec.id, { ...rec });
           } else {
             existingRec.hash = rec.hash;
             existingRec.lastAuditEntryId = rec.lastAuditEntryId;
@@ -105,19 +105,19 @@ export class ServerDispatcher {
       // leaving the client with a stale local copy forever.
       for (const rec of filterItem.records) {
         if (rec.hash != null) {
-          const deletedSet = this.#deletedRecordIds.get(filterItem.collectionName);
+          const deletedSet = this.#deletedRecordIds.get(colName);
           if (deletedSet?.has(rec.id)) {
             deletedSet.delete(rec.id);
-            this.#logger.debug(`[SD] updateFilter: cleared premature tombstone for ${rec.id} in ${filterItem.collectionName} — client reports active`);
+            this.#logger.debug(`[SD] updateFilter: cleared premature tombstone for ${rec.id} in ${colName} — client reports active`);
           }
         }
       }
 
       if (filterItem.deletedRecordIds && filterItem.deletedRecordIds.length > 0) {
-        if (!this.#deletedRecordIds.has(filterItem.collectionName)) {
-          this.#deletedRecordIds.set(filterItem.collectionName, new Set());
+        if (!this.#deletedRecordIds.has(colName)) {
+          this.#deletedRecordIds.set(colName, new Set());
         }
-        const deletedSet = this.#deletedRecordIds.get(filterItem.collectionName)!;
+        const deletedSet = this.#deletedRecordIds.get(colName)!;
         for (const id of filterItem.deletedRecordIds) deletedSet.add(id);
       }
     }
@@ -213,14 +213,14 @@ export class ServerDispatcher {
     const flagsByCol = new Map<string, Map<string, boolean>>();
 
     for (const [colName, colMap] of squashed) {
-      const filterItem = this.#filter.find(f => f.collectionName === colName);
+      const filterRecordsMap = this.#filter.get(colName);
       const deletedSet = this.#deletedRecordIds.get(colName);
       const freshRecords: (MXDBActiveRecordCursor | MXDBDeletedRecordCursor)[] = [];
       const colFlags = new Map<string, boolean>();
 
       for (const { cursor, addToFilter } of colMap.values()) {
         const id = getCursorId(cursor);
-        const filterRec = filterItem?.records.find(r => r.id === id);
+        const filterRec = filterRecordsMap?.get(id);
         const inDeletedSet = deletedSet?.has(id) === true;
 
         // Delete-is-final: anything targeting a confirmed-deleted id is skipped.
@@ -310,7 +310,7 @@ export class ServerDispatcher {
         for (const cursor of freshRecords) {
           const id = getCursorId(cursor);
           const kind = isDeletedCursor(cursor) ? 'delete' : 'active';
-          const filterHasIt = (filterItem?.records.some(r => r.id === id)) ?? false;
+          const filterHasIt = filterRecordsMap?.has(id) ?? false;
           const flag = colFlags.get(id);
           this.#logger.debug(`[SD] dispatch ${kind} ${id} in ${colName} filterHas=${filterHasIt} addToFilter=${flag}`);
         }
@@ -337,13 +337,16 @@ export class ServerDispatcher {
       response = await this.#props.onDispatch(freshRequest);
       success = true;
 
+      // Build a Map from response for O(1) lookups in steps 5 and 6.
+      const responseByCol = new Map(response.map(r => [r.collectionName, r.successfulRecordIds]));
+
       // Step 5: Update #filter and #deletedRecordIds on success
       for (const col of freshRequest) {
         const colName = col.collectionName;
-        const successIds = response.find(r => r.collectionName === colName)?.successfulRecordIds ?? [];
+        const successIds = responseByCol.get(colName) ?? [];
         const successSet = new Set(successIds);
         const colFlags = flagsByCol.get(colName) ?? new Map<string, boolean>();
-        let filterItem = this.#filter.find(f => f.collectionName === colName);
+        let filterRecordsMap = this.#filter.get(colName);
 
         for (const cursor of col.records) {
           const id = getCursorId(cursor);
@@ -354,10 +357,7 @@ export class ServerDispatcher {
               // Delete-is-final: permanently block future cursors for this id, regardless
               // of whether the record was previously in the filter or how the delete was
               // originated (authoritative or change-stream).
-              if (filterItem != null) {
-                const idx = filterItem.records.findIndex(r => r.id === id);
-                if (idx >= 0) filterItem.records.splice(idx, 1);
-              }
+              filterRecordsMap?.delete(id);
               if (!this.#deletedRecordIds.has(colName)) {
                 this.#deletedRecordIds.set(colName, new Set());
               }
@@ -365,16 +365,16 @@ export class ServerDispatcher {
               this.#logger.debug(`[SD] successfully deleted ${id} in ${colName}`);
             } else {
               // Unsuccessfully deleted: mark as pending deletion (remove hash, keep ULID).
-              if (filterItem == null) {
-                filterItem = { collectionName: colName, records: [] };
-                this.#filter.push(filterItem);
+              if (filterRecordsMap == null) {
+                filterRecordsMap = new Map();
+                this.#filter.set(colName, filterRecordsMap);
               }
-              const filterRec = filterItem.records.find(r => r.id === id);
+              const filterRec = filterRecordsMap.get(id);
               if (filterRec != null) {
                 filterRec.hash = undefined;
                 filterRec.lastAuditEntryId = cursor.lastAuditEntryId;
               } else {
-                filterItem.records.push({ id, lastAuditEntryId: cursor.lastAuditEntryId });
+                filterRecordsMap.set(id, { id, lastAuditEntryId: cursor.lastAuditEntryId });
               }
               this.#logger.debug(`[SD] unsuccessfully deleted ${id} in ${colName} — marked pending`);
             }
@@ -382,7 +382,7 @@ export class ServerDispatcher {
             if (!successSet.has(id)) continue;
 
             const cursorHash = (cursor as unknown as { hash?: string }).hash;
-            const filterRec = filterItem?.records.find(r => r.id === id);
+            const filterRec = filterRecordsMap?.get(id);
 
             if (filterRec != null) {
               // Always keep the existing filter entry in lockstep with what the CR just acked.
@@ -390,11 +390,11 @@ export class ServerDispatcher {
               filterRec.lastAuditEntryId = cursor.lastAuditEntryId;
             } else if (addToFilter) {
               // Authoritative push — add a new filter entry.
-              if (filterItem == null) {
-                filterItem = { collectionName: colName, records: [] };
-                this.#filter.push(filterItem);
+              if (filterRecordsMap == null) {
+                filterRecordsMap = new Map();
+                this.#filter.set(colName, filterRecordsMap);
               }
-              filterItem.records.push({
+              filterRecordsMap.set(id, {
                 id,
                 hash: cursorHash,
                 lastAuditEntryId: cursor.lastAuditEntryId,
@@ -412,7 +412,7 @@ export class ServerDispatcher {
       // Re-queue failed cursors preserving their original addToFilter flag.
       for (const col of freshRequest) {
         const colName = col.collectionName;
-        const successIds = response.find(r => r.collectionName === colName)?.successfulRecordIds ?? [];
+        const successIds = responseByCol.get(colName) ?? [];
         const successSet = new Set(successIds);
         const colFlags = flagsByCol.get(colName) ?? new Map<string, boolean>();
         const failed = col.records.filter(c => !successSet.has(getCursorId(c)));

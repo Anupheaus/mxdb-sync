@@ -80,6 +80,11 @@ export class AuthCollection {
     return docs.map(fromDoc);
   }
 
+  async upsert(record: MXDBAuthRecord): Promise<void> {
+    const coll = await this.#coll;
+    await coll.replaceOne({ _id: record.requestId } as any, toDoc(record), { upsert: true });
+  }
+
   async update(requestId: string, patch: Partial<Omit<MXDBAuthRecord, 'requestId'>>): Promise<void> {
     const coll = await this.#coll;
     // Build $set and $unset from the patch

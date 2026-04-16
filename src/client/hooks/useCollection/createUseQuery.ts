@@ -1,12 +1,12 @@
 import { useMemo, useRef } from 'react';
-import type { Record } from '@anupheaus/common';
+import type { Logger, Record } from '@anupheaus/common';
 import type { Query } from './createQuery';
 import { useSyncState } from '@anupheaus/react-ui';
 import type { QueryProps } from '../../../common';
 import type { MXDBError } from '../../../common';
 import type { AddDebugTo, AddDisableTo } from '../../../common/models';
 
-export function createUseQuery<RecordType extends Record>(query: Query<RecordType>) {
+export function createUseQuery<RecordType extends Record>(query: Query<RecordType>, logger: Logger) {
 
   return (props: AddDebugTo<AddDisableTo<QueryProps<RecordType>>> = {}) => {
     const { setState, getState } = useSyncState(() => ({ records: [] as RecordType[], total: 0, isLoading: true, error: undefined as MXDBError | undefined }));
@@ -15,18 +15,21 @@ export function createUseQuery<RecordType extends Record>(query: Query<RecordTyp
 
     useMemo(() => {
       if (props.disable) {
-        if (props.debug) console.log('[MXDB-Sync] Query is disabled, returning default', props); // eslint-disable-line no-console
+        if (props.debug) logger.debug('useQuery disabled', { props });
         setState({ records: [], total: 0, isLoading: false, error: undefined });
       } else {
         setState(s => ({ ...s, isLoading: true }));
         const requestId = requestIdRef.current = Math.uniqueId();
-        if (props.debug) console.log('[MXDB-Sync] Sending query', { requestId, props }); // eslint-disable-line no-console
+        if (props.debug) logger.debug('useQuery send', { requestId, props });
         query(props, ({ records, total }) => {
-          if (props.debug) console.log('[MXDB-Sync] Received query response', { requestId, records, total }); // eslint-disable-line no-console
+          if (props.debug) logger.debug('useQuery response', { requestId, count: records.length, total });
           if (requestId !== requestIdRef.current) return;
           lastResponseRef.current = { records, total }; // store the last response to be used when the query is disabled and then the same props are passed again, the onSameResponse callback will be called
           setState({ records, total, isLoading: false, error: undefined });
-        }, () => setState(s => ({ ...s, ...lastResponseRef.current, isLoading: false })));
+        }, () => setState(s => ({ ...s, ...lastResponseRef.current, isLoading: false }))).catch(error => {
+          logger.error('useQuery threw', { props, error: error instanceof Error ? error.message : String(error) });
+          setState(s => ({ ...s, isLoading: false, error: error as MXDBError }));
+        });
       }
     }, [Object.hash(props)]);
 

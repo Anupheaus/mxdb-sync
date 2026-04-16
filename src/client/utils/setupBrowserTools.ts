@@ -1,6 +1,6 @@
-export function setupBrowserTools() {
+export function setupBrowserTools(appName: string) {
   // Setup some tools we can use in the browser
-  (window as any).mxdb = {
+  const tools: Record<string, unknown> = {
     async listDatabases() {
       const getDirectory = globalThis.navigator?.storage?.getDirectory?.bind(globalThis.navigator?.storage) as undefined | (() => Promise<FileSystemDirectoryHandle>);
       if (typeof getDirectory !== 'function') {
@@ -40,4 +40,18 @@ export function setupBrowserTools() {
       return results;
     },
   };
+
+  // Dev-only auth bypass tools — eliminated entirely in production builds
+  if (process.env.NODE_ENV !== 'production') {
+    tools['setDevAuth'] = (token: string, keyHash: string) => {
+      localStorage.setItem(`mxdb:dev-auth:${appName}`, JSON.stringify({ token, keyHash }));
+      window.location.reload();
+    };
+    tools['clearDevAuth'] = () => {
+      localStorage.removeItem(`mxdb:dev-auth:${appName}`);
+      window.location.reload();
+    };
+  }
+
+  (window as any).mxdb = tools;
 }

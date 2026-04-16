@@ -1,8 +1,16 @@
 import type { DataFilters } from '@anupheaus/common';
+import { DateTime } from 'luxon';
 
 export interface SqlFragment {
   where: string;   // empty string means "no filter"
   params: unknown[];
+}
+
+/** Convert a filter value to a type SQLite bind() accepts. */
+function serializeParam(value: unknown): unknown {
+  if (value instanceof Date) return value.toISOString();
+  if (DateTime.isDateTime(value)) return value.toISO();
+  return value;
 }
 
 // ─── Field path → json_extract expression ────────────────────────────────────
@@ -16,33 +24,34 @@ function jsonExtract(path: string[]): string {
 function operatorToSql(path: string[], operator: string, value: unknown): SqlFragment {
   const field = jsonExtract(path);
 
+  const sv = serializeParam(value);
   switch (operator) {
     case '$eq':
-      return { where: `${field} = ?`, params: [value] };
+      return { where: `${field} = ?`, params: [sv] };
     case '$ne':
-      return { where: `${field} != ?`, params: [value] };
+      return { where: `${field} != ?`, params: [sv] };
     case '$gt':
-      return { where: `${field} > ?`, params: [value] };
+      return { where: `${field} > ?`, params: [sv] };
     case '$lt':
-      return { where: `${field} < ?`, params: [value] };
+      return { where: `${field} < ?`, params: [sv] };
     case '$gte':
-      return { where: `${field} >= ?`, params: [value] };
+      return { where: `${field} >= ?`, params: [sv] };
     case '$lte':
-      return { where: `${field} <= ?`, params: [value] };
+      return { where: `${field} <= ?`, params: [sv] };
     case '$like':
-      return { where: `${field} LIKE ?`, params: [value] };
+      return { where: `${field} LIKE ?`, params: [sv] };
     case '$beginsWith':
-      return { where: `${field} LIKE ?`, params: [`${value}%`] };
+      return { where: `${field} LIKE ?`, params: [`${sv}%`] };
     case '$endsWith':
-      return { where: `${field} LIKE ?`, params: [`%${value}`] };
+      return { where: `${field} LIKE ?`, params: [`%${sv}`] };
     case '$in': {
-      const arr = (Array.isArray(value) ? value : [value]) as unknown[];
+      const arr = (Array.isArray(value) ? value : [value]).map(serializeParam);
       if (arr.length === 0) return { where: '0', params: [] };
       return { where: `${field} IN (${arr.map(() => '?').join(', ')})`, params: arr };
     }
     case '$ni':
     case '$nin': {
-      const arr = (Array.isArray(value) ? value : [value]) as unknown[];
+      const arr = (Array.isArray(value) ? value : [value]).map(serializeParam);
       if (arr.length === 0) return { where: '1', params: [] };
       return { where: `${field} NOT IN (${arr.map(() => '?').join(', ')})`, params: arr };
     }
@@ -91,8 +100,8 @@ function translateValue(path: string[], value: unknown): SqlFragment {
   // Direct array shorthand → $in
   if (Array.isArray(value)) return operatorToSql(path, '$in', value);
 
-  // Primitive / Date / RegExp — direct equality
-  if (typeof value !== 'object' || value instanceof RegExp) {
+  // Primitive / Date / DateTime / RegExp — direct equality
+  if (typeof value !== 'object' || value instanceof RegExp || value instanceof Date || DateTime.isDateTime(value)) {
     return operatorToSql(path, '$eq', value);
   }
 

@@ -85,6 +85,16 @@ export class ClientReceiver {
     }>();
     const noLocalStateDeleteIds = new Map<string, string[]>();
 
+    // Summary counters — replaces per-record debug spam.
+    let acceptedNew = 0;
+    let acceptedUpdate = 0;
+    let acceptedDelete = 0;
+    let skippedPendingLocal = 0;
+    let skippedStaleCursor = 0;
+    let skippedTombstonedResurrect = 0;
+    let deleteOverPending = 0;
+    let alreadyConsistentDelete = 0;
+
     for (const col of payload) {
       const colName = col.collectionName;
       const colLocalMap = localMap.get(colName) ?? new Map();
@@ -96,8 +106,7 @@ export class ClientReceiver {
         if (localState == null) {
           // No local state
           if (isActiveCursor(cursor)) {
-            // No local state + active cursor: accept
-            this.#logger.debug(`[CR] no local state for active cursor ${id} in ${colName} — accepting`);
+            acceptedNew++;
             if (!updatesByCollection.has(colName)) {
               updatesByCollection.set(colName, { records: [], deletedRecordIds: [] });
             }
@@ -106,8 +115,8 @@ export class ClientReceiver {
               lastAuditEntryId: cursor.lastAuditEntryId,
             });
           } else {
-            // No local state + delete cursor: log warn, add to noLocalStateDeleteIds
-            this.#logger.warn(`[CR] no local state for delete cursor ${id} in ${colName} — already consistent`);
+            alreadyConsistentDelete++;
+            this.#logger.silly('[CR] delete cursor for unknown record — already consistent', { collectionName: colName, recordId: id });
             if (!noLocalStateDeleteIds.has(colName)) {
               noLocalStateDeleteIds.set(colName, []);
             }
@@ -121,16 +130,11 @@ export class ClientReceiver {
         // A concurrent delete cursor for the same record is a no-op and still succeeds.
         if (!isActiveRecordState(localState)) {
           if (isActiveCursor(cursor)) {
-            // This record has just been deleted locally on this client. The active cursor
-            // was dispatched by SD before the local delete was written (or while it was
-            // still in-flight through the network), so it is stale from the client's
-            // perspective. Delete-is-final: the client's local tombstone wins and the
-            // active cursor is skipped. This is an expected race, not a bug.
-            this.#logger.debug(`[CR] skipping active cursor ${id} in ${colName} — record has just been deleted locally`);
+            skippedTombstonedResurrect++;
+            this.#logger.silly('[CR] skipping active cursor — local tombstone (delete-is-final)', { collectionName: colName, recordId: id });
             continue;
           }
-          // Delete cursor against tombstone: already consistent, report success.
-          this.#logger.debug(`[CR] delete cursor ${id} in ${colName} matches local tombstone — already consistent`);
+          alreadyConsistentDelete++;
           if (!noLocalStateDeleteIds.has(colName)) {
             noLocalStateDeleteIds.set(colName, []);
           }
@@ -149,15 +153,15 @@ export class ClientReceiver {
           // (the SR would reject them anyway). Write a local tombstone so subsequent
           // active cursors cannot resurrect the record.
           if (!isActiveCursor(cursor)) {
-            this.#logger.debug(`[CR] applying delete cursor ${id} in ${colName} over pending local changes — delete-is-final`);
+            deleteOverPending++;
+            this.#logger.silly('[CR] applying delete over pending local changes — delete-is-final', { collectionName: colName, recordId: id });
             if (!updatesByCollection.has(colName)) {
               updatesByCollection.set(colName, { records: [], deletedRecordIds: [] });
             }
             updatesByCollection.get(colName)!.deletedRecordIds.push(id);
             continue;
           }
-          // Active cursor with pending local changes — skip; CD will merge via C2S
-          this.#logger.debug(`[CR] skipping cursor ${id} in ${colName} — local audit has pending changes`);
+          skippedPendingLocal++;
           continue;
         }
 
@@ -169,13 +173,13 @@ export class ClientReceiver {
           const localBranchId = branchUlid ?? '';
 
           if (cursor.lastAuditEntryId < localBranchId) {
-            this.#logger.debug(`[CR] skipping stale cursor ${id} in ${colName} — cursor=${cursor.lastAuditEntryId} < local=${localBranchId}`);
+            skippedStaleCursor++;
+            this.#logger.silly('[CR] skipping stale cursor', { collectionName: colName, recordId: id, cursorEntryId: cursor.lastAuditEntryId, localBranchId });
             continue;
           }
         }
 
-        // Branch-only + newer: collect for onUpdate
-        this.#logger.debug(`[CR] accepting cursor ${id} in ${colName} — branch-only and newer`);
+        if (isActiveCursor(cursor)) acceptedUpdate++; else acceptedDelete++;
         if (!updatesByCollection.has(colName)) {
           updatesByCollection.set(colName, { records: [], deletedRecordIds: [] });
         }
@@ -199,10 +203,15 @@ export class ClientReceiver {
       updateRequest.push(item);
     }
 
+    this.#logger.debug('[CR] process pass', {
+      acceptedNew, acceptedUpdate, acceptedDelete,
+      skippedPendingLocal, skippedStaleCursor, skippedTombstonedResurrect,
+      deleteOverPending, alreadyConsistentDelete,
+    });
+
     let response: MXDBSyncEngineResponse = [];
     if (updateRequest.length > 0) {
       response = this.#props.onUpdate(updateRequest);
-      this.#logger.debug('[CR] onUpdate called, response received');
     }
 
     // Step 4: Merge noLocalStateDeleteIds into response

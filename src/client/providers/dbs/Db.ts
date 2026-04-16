@@ -85,13 +85,53 @@ export class Db {
   }
 
   async #openDb(collections: MXDBCollectionConfig[]): Promise<void> {
-    const statements: string[] = [
-      AUTH_TABLE_DDL, // always create the internal auth table first
-    ];
+    // Phase 1: open the database with just the auth table so the worker is ready for queries.
+    await this.#worker.open(this.#name, [AUTH_TABLE_DDL]);
+
+    // Phase 2: migrate audit tables from the old single-column PK schema (id TEXT PRIMARY KEY)
+    // to the composite PK schema (PRIMARY KEY (id, recordId)). The audit table is a local cache —
+    // the server re-syncs any entries lost during migration on next connect.
+    // Run all schema checks in parallel so their queries are queued at once rather than sequentially.
+    await Promise.all(collections.map(config => this.#migrateAuditTableIfNeeded(`${config.name}_audit`)));
+
+    // Phase 3: create/ensure all collection tables (idempotent with IF NOT EXISTS).
+    const collectionStatements: string[] = [];
     for (const config of collections) {
-      const isAudited = config.disableAudit !== true;
-      statements.push(...buildTableDDL(config.name, config.indexes ?? [], isAudited));
+      collectionStatements.push(...buildTableDDL(config.name, config.indexes ?? [], config.disableAudit !== true));
     }
-    await this.#worker.open(this.#name, statements);
+    if (collectionStatements.length > 0) {
+      await this.#worker.execBatch(collectionStatements.map(sql => ({ sql })));
+    }
+  }
+
+  /**
+   * Detects the old single-column PRIMARY KEY schema on the audit table and migrates
+   * it to the composite (id, recordId) PRIMARY KEY. Safe to call repeatedly — exits
+   * immediately if the table is already on the new schema or does not exist yet.
+   */
+  async #migrateAuditTableIfNeeded(auditTable: string): Promise<void> {
+    const rows = await this.#worker.query<{ sql: string }>(
+      `SELECT sql FROM sqlite_master WHERE type='table' AND name=?`,
+      [auditTable],
+    );
+    if (rows.length === 0) return; // table does not exist yet — nothing to migrate
+    const schemaSql = rows[0].sql ?? '';
+    // Old schema has "id TEXT PRIMARY KEY" (single-column). New schema has "PRIMARY KEY (id, recordId)".
+    if (!schemaSql.includes('id TEXT PRIMARY KEY')) return; // already migrated
+
+    // Recreate with composite PK. Use a temp name to avoid DROP IF EXISTS race.
+    const tempTable = `${auditTable}_migrating`;
+    await this.#worker.execBatch([
+      {
+        sql: `CREATE TABLE IF NOT EXISTS "${tempTable}" ` +
+          '(id TEXT NOT NULL, recordId TEXT NOT NULL, type INTEGER NOT NULL, ' +
+          'timestamp INTEGER NOT NULL, record TEXT, ops TEXT, PRIMARY KEY (id, recordId))',
+      },
+      {
+        sql: `INSERT OR IGNORE INTO "${tempTable}" SELECT id, recordId, type, timestamp, record, ops FROM "${auditTable}"`,
+      },
+      { sql: `DROP TABLE "${auditTable}"` },
+      { sql: `ALTER TABLE "${tempTable}" RENAME TO "${auditTable}"` },
+    ]);
   }
 }

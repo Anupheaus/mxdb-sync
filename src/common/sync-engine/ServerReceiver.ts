@@ -69,12 +69,7 @@ export class ServerReceiver {
 
     // Step 1: Pause the SD so queued/pending dispatches hold until we finish.
     serverDispatcher.pause();
-    // §diag — enumerate each record id with entry-type sequence so we can
-    // pinpoint exactly which path each record took through the merge loop.
-    const reqSummary = request
-      .map(col => col.records.map(r => `${col.collectionName}/${r.id.slice(0, 8)}[${r.entries.map(e => e.type).join(',')}]`).join(';'))
-      .join(' | ');
-    this.#logger.debug(`[SR] ${srId} process.begin collections=${request.length} records=${totalRecords} req=${reqSummary}`);
+    this.#logger.debug('[SR] process.begin', { srId, collections: request.length, records: totalRecords });
 
     // Step 2: Synchronously mirror the client's claimed state into #filter.
     // MUST happen before any await — any change-stream event that races with
@@ -135,7 +130,6 @@ export class ServerReceiver {
             // Branched-only: nothing to merge. Compare with server state and
             // queue a disparity push if needed.
             const serverState = colServerMap.get(recordId);
-            this.#logger.debug(`[SR] ${srId} path=branchOnly rec=${recordId.slice(0, 8)} serverState=${serverState == null ? 'none' : isActiveRecordState(serverState) ? 'active' : 'deleted'}`);
             branchOnlyDisparities.push({ collectionName: colName, recordId, clientHash: rec.hash, serverState });
             if (!branchOnlySuccessIds.has(colName)) branchOnlySuccessIds.set(colName, []);
             branchOnlySuccessIds.get(colName)!.push(recordId);
@@ -160,26 +154,28 @@ export class ServerReceiver {
             if (strippedEntries[0].type !== AuditEntryType.Created) {
               const isClientDeletion = strippedEntries.some(e => e.type === AuditEntryType.Deleted);
               if (isClientDeletion) {
-                this.#logger.debug(`[SR] ${srId} path=absentDelete rec=${recordId.slice(0, 8)} — client deletion for absent server record; already consistent`);
                 if (!branchOnlySuccessIds.has(colName)) branchOnlySuccessIds.set(colName, []);
                 branchOnlySuccessIds.get(colName)!.push(recordId);
               } else {
-                this.#logger.error(`[SR] ${srId} path=ORPHAN rec=${recordId.slice(0, 8)} — new record does not have Created as first entry — skipping`, { clientEntryTypes: strippedEntries.map(e => e.type) });
+                this.#logger.error('[SR] ORPHAN: new record does not have Created as first entry — skipping', {
+                  srId, collectionName: colName, recordId, clientEntryTypes: strippedEntries.map(e => e.type),
+                });
               }
               continue;
             }
-            this.#logger.debug(`[SR] ${srId} path=newRecord rec=${recordId.slice(0, 8)} entries=${strippedEntries.length}`);
             mergedEntries = strippedEntries;
           } else {
-            this.#logger.debug(`[SR] ${srId} path=merge rec=${recordId.slice(0, 8)} serverEntries=${serverState.audit.length} clientEntries=${strippedEntries.length}`);
             try {
               const serverAuditOf = { id: recordId, entries: serverState.audit as AuditEntry[] };
               const clientAuditOf = { id: recordId, entries: strippedEntries };
               const merged = auditor.merge(serverAuditOf, clientAuditOf, this.#logger);
               mergedEntries = merged.entries as AuditEntry[];
-              this.#logger.debug(`[SR] ${srId} merge.result rec=${recordId.slice(0, 8)} mergedEntries=${mergedEntries.length} changed=${mergedEntries.length !== serverState.audit.length}`);
             } catch (err) {
-              this.#logger.error(`[SR] ${srId} merge failed for ${recordId} in ${colName} — skipping`, { error: err });
+              this.#logger.error('[SR] merge failed — skipping', {
+                srId, collectionName: colName, recordId,
+                serverEntries: serverState.audit.length, clientEntries: strippedEntries.length,
+                error: err instanceof Error ? err.message : String(err),
+              });
               continue;
             }
           }
@@ -189,7 +185,10 @@ export class ServerReceiver {
             const { live } = replayHistoryEndState(mergedEntries, undefined, this.#logger);
             liveRecord = live;
           } catch (err) {
-            this.#logger.error(`[SR] replay failed for ${recordId} in ${colName} — skipping`, { error: err });
+            this.#logger.error('[SR] replay failed — skipping', {
+              srId, collectionName: colName, recordId, mergedEntries: mergedEntries.length,
+              error: err instanceof Error ? err.message : String(err),
+            });
             continue;
           }
 
@@ -267,7 +266,6 @@ export class ServerReceiver {
           const serverHash = branchedHashByIdx.get(branchedActiveIdx++)!;
           if (serverHash === d.clientHash) continue; // already consistent
           const serverLastId = this.#getLastAuditEntryId(d.serverState.audit);
-          this.#logger.debug(`[SR] disparity push (branched-only active) ${d.recordId} in ${d.collectionName}`);
           const cursor: MXDBActiveRecordCursor & { hash: string } = {
             record: d.serverState.record,
             lastAuditEntryId: serverLastId,
@@ -278,7 +276,6 @@ export class ServerReceiver {
           // Server is deleted. If the client still thinks it's active, deliver the delete.
           if (d.clientHash == null) continue; // client already knows it's deleted
           const serverLastId = this.#getLastAuditEntryId(d.serverState.audit);
-          this.#logger.debug(`[SR] disparity push (branched-only delete) ${d.recordId} in ${d.collectionName}`);
           const cursor: MXDBDeletedRecordCursor = { recordId: d.recordId, lastAuditEntryId: serverLastId };
           ensureCol(d.collectionName).records.push(cursor);
         }
@@ -295,7 +292,6 @@ export class ServerReceiver {
         if (item.liveRecord != null) {
           const mergedHash = persistedHashByKey.get(`${colName}::${item.recordId}`)!;
           if (mergedHash === item.clientHash) continue; // client already matches the merged state
-          this.#logger.debug(`[SR] disparity push (merged active) ${item.recordId} in ${colName}`);
           const cursor: MXDBActiveRecordCursor & { hash: string } = {
             record: item.liveRecord,
             lastAuditEntryId,
@@ -305,7 +301,6 @@ export class ServerReceiver {
         } else {
           // Merged result is a delete. If the client still thought it was active, deliver the delete.
           if (item.clientHash == null) continue;
-          this.#logger.debug(`[SR] disparity push (merged delete) ${item.recordId} in ${colName}`);
           const cursor: MXDBDeletedRecordCursor = { recordId: item.recordId, lastAuditEntryId };
           ensureCol(colName).records.push(cursor);
         }
@@ -317,10 +312,10 @@ export class ServerReceiver {
 
       const disparityMs = Math.round(performance.now() - disparityT0);
       const totalMs = Math.round(performance.now() - processT0);
-      this.#logger.debug(`[SR] ${srId} process.done records=${totalRecords} total=${totalMs}ms mirror=${mirrorMs}ms retrieve=${retrieveMs}ms merge=${mergeMs}ms persist=${persistMs}ms disparity=${disparityMs}ms pushed=${pushPayload.reduce((a, c) => a + c.records.length, 0)}`);
-      if (totalMs >= 2000) {
-        this.#logger.warn(`[SR] ${srId} slow process records=${totalRecords} total=${totalMs}ms mirror=${mirrorMs}ms retrieve=${retrieveMs}ms merge=${mergeMs}ms persist=${persistMs}ms disparity=${disparityMs}ms`);
-      }
+      const pushedRecords = pushPayload.reduce((a, c) => a + c.records.length, 0);
+      const timings = { srId, records: totalRecords, totalMs, mirrorMs, retrieveMs, mergeMs, persistMs, disparityMs, pushedRecords };
+      this.#logger.debug('[SR] process.done', timings);
+      if (totalMs >= 2000) this.#logger.warn('[SR] slow process', timings);
 
       return successResponse;
 
@@ -328,12 +323,12 @@ export class ServerReceiver {
       // Log at debug; the caller (clientToServerSyncAction) owns the decision of whether
       // this is an error or an expected transient failure (e.g. Mongo client close during
       // a mid-test server restart), so we avoid a double-error log here.
-      this.#logger.debug(`[SR] ${srId} process threw — SD will be resumed`, { error: err });
+      this.#logger.debug('[SR] process threw — SD will be resumed', { srId, error: err instanceof Error ? err.message : String(err) });
       throw err;
     } finally {
       // Step 8: Resume the SD unconditionally.
       serverDispatcher.resume();
-      this.#logger.debug(`[SR] ${srId} process complete, SD resumed`);
+      this.#logger.silly('[SR] process complete, SD resumed', { srId });
     }
   }
 

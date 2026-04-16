@@ -13,6 +13,7 @@
  */
 // @vitest-environment jsdom
 
+import '@anupheaus/common';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { act, useLayoutEffect, useState } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
@@ -33,12 +34,26 @@ import { createUseDistinct } from './createUseDistinct';
 import { createUseGet } from './createUseGet';
 
 vi.mock('@anupheaus/socket-api/client', () => ({
-  useSocketAPI: () => ({ getIsConnected: () => false }),
-  useSubscription: () => ({
-    subscribe: vi.fn().mockResolvedValue(undefined),
-    unsubscribe: vi.fn(),
-    onCallback: vi.fn(),
-  }),
+  useSocketAPI: () => ({ getIsConnected: () => true }),
+  useSubscription: () => {
+    // Simulate server acknowledging the subscription by calling the registered
+    // onCallback handler after subscribe resolves. This mimics real socket-api
+    // behaviour where the server sends the current state when a client subscribes,
+    // which triggers executeValidateAndUpdate() and loads local data into state.
+    let storedCallback: ((response: unknown) => void) | undefined;
+    return {
+      subscribe: vi.fn().mockImplementation(async () => {
+        // Fire on the next microtask so it runs after execute() has returned true
+        // and remoteQueryCalledRef has been set, matching production timing.
+        await Promise.resolve();
+        storedCallback?.([]);
+      }),
+      unsubscribe: vi.fn(),
+      onCallback: vi.fn().mockImplementation((cb: (response: unknown) => void) => {
+        storedCallback = cb;
+      }),
+    };
+  },
   useAction: () =>
     new Proxy(
       { isConnected: () => false },
@@ -137,7 +152,7 @@ function AllHooksProbe({ collection, targetId }: { collection: MockLocalCollecti
   const get = createGet(db);
 
   const useGetAll = createUseGetAll(getAll);
-  const useQuery = createUseQuery(query);
+  const useQuery = createUseQuery(query, logger);
   const useDistinct = createUseDistinct(distinct);
   const useGet = createUseGet(db, get);
 

@@ -26,7 +26,7 @@ export function createGet<RecordType extends Record>(dbCollection: DbCollection<
         ACTION_TIMEOUT_MS,
         `mxdbGetAction(${dbCollection.name})`,
       );
-      return dbCollection.get(idsRetrieved);
+      return await dbCollection.get(idsRetrieved);
     }
     return records;
   }

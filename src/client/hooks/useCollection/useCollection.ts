@@ -48,13 +48,12 @@ export function useCollection<RecordType extends Record>(collection: MXDBCollect
   const remove = createRemove(dbCollection, logger);
   const useSubscription = createUseSubscription(logger);
   const getAll = createGetAll(dbCollection, useSubscription, logger);
-  const makeNewQuery = () => createQuery(dbCollection, useSubscription, logger);
-  const query = makeNewQuery();
+  const query = createQuery(dbCollection, useSubscription, logger);
   const distinct = createDistinct(dbCollection, useSubscription, logger);
-  const find = createFind(makeNewQuery());
-  const tableRequest = createTableRequest(makeNewQuery());
+  const find = createFind(query);
+  const tableRequest = createTableRequest(query);
   const useGet = createUseGet(dbCollection, get);
-  const useQuery = createUseQuery(makeNewQuery());
+  const useQuery = createUseQuery(createQuery(dbCollection, useSubscription, logger), logger);
   const useDistinct = createUseDistinct(distinct);
   const useGetAll = createUseGetAll(getAll);
   const onChange = createOnChange(dbCollection);

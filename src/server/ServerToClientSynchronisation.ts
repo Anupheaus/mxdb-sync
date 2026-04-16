@@ -67,6 +67,12 @@ export class ServerToClientSynchronisation {
           if (error instanceof Error && error.message === 'MXDB_SYNC_PAUSED') {
             throw new SyncPausedError();
           }
+          const errAny = error as any;
+          this.#logger.warn('S2C emitS2C threw (likely client disconnect race)', {
+            errorMessage: errAny?.message ?? String(error),
+            errorCode: errAny?.code,
+            errorName: errAny?.name,
+          });
           throw error;
         }
       },
@@ -180,99 +186,122 @@ export class ServerToClientSynchronisation {
     catch { return; }
 
     const disableAudit = this.#disableAuditByCollection.get(collectionName) === true;
-    const cursors: (MXDBActiveRecordCursor | MXDBDeletedRecordCursor)[] = [];
+    const allIds = records.ids();
 
-    for (const record of records) {
-      try {
-        // Pair-consistency loop — the cursor's `record` and `lastAuditEntryId` MUST
-        // reflect the same server state. The change-stream `fullDocument` that seeded
-        // this call is a snapshot from the event's own write point, which under
-        // concurrent writes can be stale relative to later-committed audit entries;
-        // splicing that stale record together with a freshly-read `lastAuditEntryId`
-        // produced cursors that claimed to represent the newest entry but carried an
-        // older record payload, so clients materialised the wrong state (observed
-        // across multiple stress runs: all clients branched at the latest entry id
-        // but with an earlier entry's record content).
-        //
-        // To guarantee a consistent pair without a transaction: read audit → read
-        // live record → read audit again. If the audit's last entry id is unchanged,
-        // no write raced us between the two reads, so the live record reflects at
-        // least that entry's state and the pair is safe to push. Otherwise retry.
-        let lastAuditEntryId = '';
-        let freshRecord: MXDBRecord | undefined;
-        if (disableAudit) {
-          freshRecord = (await collection.get([record.id]))[0];
+    // Pair-consistency check — the cursor's `record` and `lastAuditEntryId` MUST
+    // reflect the same server state. Uses batch reads (one MongoDB round-trip per
+    // step) rather than per-record queries, reducing N×3 queries to 3 total.
+    //
+    // Step ordering: audit-before → (live + audit-after in parallel). Any write
+    // that lands during this window changes audit-after's lastEntryId, which we
+    // detect and retry individually.
+    let cursors: (MXDBActiveRecordCursor & { hash: string })[];
+
+    if (disableAudit) {
+      const freshRecords = await collection.get(allIds);
+      cursors = await Promise.all(
+        freshRecords.map(async freshRecord => ({ record: freshRecord, lastAuditEntryId: '', hash: await hashRecord(freshRecord) }))
+      );
+    } else {
+      // Step 1: batch audit-before
+      const auditsBefore = await collection.getAudit(allIds);
+      const auditBeforeMap = new Map(auditsBefore.map(a => [a.id, a]));
+
+      // Step 2: batch live-records + audit-after in parallel
+      const [freshRecords, auditsAfter] = await Promise.all([
+        collection.get(allIds),
+        collection.getAudit(allIds),
+      ]);
+      const freshRecordMap = new Map(freshRecords.map(r => [r.id, r]));
+      const auditAfterMap = new Map(auditsAfter.map(a => [a.id, a]));
+
+      // Step 3: check consistency per record; collect those that need a per-record retry
+      type ConsistentResult = { id: string; freshRecord: MXDBRecord; lastAuditEntryId: string };
+      const consistent: ConsistentResult[] = [];
+      const needsRetry: string[] = [];
+
+      for (const record of records) {
+        const id = record.id;
+        const auditBefore = auditBeforeMap.get(id);
+        const auditAfter = auditAfterMap.get(id);
+
+        if ((auditBefore != null && auditor.isDeleted(auditBefore)) || (auditAfter != null && auditor.isDeleted(auditAfter))) {
+          this.#logger.silly('[s2c] #buildAndPush: filtered tombstoned record per §10.1', { collectionName, recordId: id });
+          continue;
+        }
+
+        const idBefore = auditBefore != null ? (auditor.getLastEntryId(auditBefore) ?? '') : '';
+        const idAfter = auditAfter != null ? (auditor.getLastEntryId(auditAfter) ?? '') : '';
+
+        if (idBefore === idAfter) {
+          const freshRecord = freshRecordMap.get(id);
+          if (freshRecord == null) {
+            this.#logger.silly('[s2c] #buildAndPush: live record missing after audit — skipping', { collectionName, recordId: id });
+            continue;
+          }
+          consistent.push({ id, freshRecord, lastAuditEntryId: idAfter });
         } else {
+          this.#logger.silly('[s2c] #buildAndPush: audit changed between reads — falling back to per-record retry', {
+            collectionName, recordId: id, idBefore, idAfter,
+          });
+          needsRetry.push(id);
+        }
+      }
+
+      // Step 4: hash consistent records in parallel
+      const consistentCursors = await Promise.all(consistent.map(async ({ freshRecord, lastAuditEntryId }) => ({
+        record: freshRecord,
+        lastAuditEntryId,
+        hash: await hashRecord(freshRecord),
+      } as MXDBActiveRecordCursor & { hash: string })));
+
+      // Step 5: per-record retry for the rare inconsistent cases
+      const retryCursors = await Promise.all(needsRetry.map(async (id): Promise<(MXDBActiveRecordCursor & { hash: string }) | null> => {
+        try {
+          let lastAuditEntryId = '';
+          let freshRecord: MXDBRecord | undefined;
           let tombstoned = false;
+          let lastIdBefore = '';
+          let lastIdAfter = '';
+          let attemptsUsed = 0;
           for (let attempt = 0; attempt < 4; attempt++) {
-            const auditBefore = await collection.getAudit(record.id);
+            attemptsUsed = attempt + 1;
+            const auditBefore = await collection.getAudit(id);
             if (auditBefore != null && auditor.isDeleted(auditBefore)) {
-              // §10.1 — drop upserts for tombstoned records to prevent resurrection.
-              this.#logger.silly('[s2c] #buildAndPush: filtered tombstoned record per §10.1', {
-                collectionName, recordId: record.id,
-              });
               tombstoned = true;
               break;
             }
             const idBefore = auditBefore != null ? (auditor.getLastEntryId(auditBefore) ?? '') : '';
-            const candidate = (await collection.get([record.id]))[0];
-            const auditAfter = await collection.getAudit(record.id);
+            const candidate = (await collection.get([id]))[0];
+            const auditAfter = await collection.getAudit(id);
             if (auditAfter != null && auditor.isDeleted(auditAfter)) {
-              this.#logger.silly('[s2c] #buildAndPush: filtered tombstoned record per §10.1 (post-read)', {
-                collectionName, recordId: record.id,
-              });
               tombstoned = true;
               break;
             }
             const idAfter = auditAfter != null ? (auditor.getLastEntryId(auditAfter) ?? '') : '';
-            if (idBefore === idAfter) {
-              freshRecord = candidate;
-              lastAuditEntryId = idAfter;
-              break;
-            }
-            this.#logger.silly('[s2c] #buildAndPush: audit changed between reads — retrying for pair consistency', {
-              collectionName, recordId: record.id, idBefore, idAfter, attempt,
-            });
+            lastIdBefore = idBefore;
+            lastIdAfter = idAfter;
+            if (idBefore === idAfter) { freshRecord = candidate; lastAuditEntryId = idAfter; break; }
           }
-          if (tombstoned) continue;
+          if (tombstoned || freshRecord == null) return null;
           if (freshRecord === undefined && lastAuditEntryId === '') {
-            this.#logger.warn('[s2c] #buildAndPush: gave up on pair consistency after retries — skipping', {
-              collectionName, recordId: record.id,
+            this.#logger.warn('[s2c] gave up on pair consistency after retries — skipping', {
+              collectionName, recordId: id, attempts: attemptsUsed, idBefore: lastIdBefore, idAfter: lastIdAfter,
             });
-            continue;
+            return null;
           }
+          return { record: freshRecord, lastAuditEntryId, hash: await hashRecord(freshRecord) };
+        } catch (error) {
+          if (isTransientMongoCloseError(error)) {
+            this.#logger.warn('[s2c] #buildAndPush: aborted by client close (shutdown race)', { collectionName, recordId: id });
+          } else {
+            this.#logger.error('[s2c] #buildAndPush: failed to build active cursor (retry)', { collectionName, recordId: id, error: error as Record<string, unknown> });
+          }
+          return null;
         }
-        if (freshRecord == null) {
-          // Record was deleted between audit snapshots but the audit has not yet been
-          // marked as deleted (rare race). Skip — the delete cursor path will catch it.
-          this.#logger.silly('[s2c] #buildAndPush: live record missing after audit — skipping', {
-            collectionName, recordId: record.id,
-          });
-          continue;
-        }
-        const hash = await hashRecord(freshRecord);
-        const active: MXDBActiveRecordCursor & { hash: string } = {
-          record: freshRecord,
-          lastAuditEntryId,
-          hash,
-        };
-        cursors.push(active);
-      } catch (error) {
-        // Client close races are expected at shutdown / mid-test server restart —
-        // the in-flight audit/hash work gets aborted. Not a correctness failure;
-        // downgrade so getAppLoggerErrorCount() does not trip on transient shutdown noise.
-        if (isTransientMongoCloseError(error)) {
-          this.#logger.warn('[s2c] #buildAndPush: aborted by client close (shutdown race)', {
-            collectionName, recordId: record.id,
-          });
-        } else {
-          this.#logger.error('[s2c] #buildAndPush: failed to build active cursor', {
-            collectionName,
-            recordId: record.id,
-            error: error as Record<string, unknown>,
-          });
-        }
-      }
+      }));
+
+      cursors = [...consistentCursors, ...retryCursors.filter((c): c is MXDBActiveRecordCursor & { hash: string } => c != null)];
     }
 
     if (cursors.length === 0) return;

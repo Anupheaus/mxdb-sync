@@ -80,6 +80,7 @@ export class DbCollection<RecordType extends Record = Record> {
     this.#worker = worker;
     this.#records = new Map();
     this.#auditRecords = new Map();
+    this.#pendingIds = new Set();
     this.#callbacks = new Set();
     this.#logger = logger;
     this.#loadingPromise = ready.then(() => this.#loadData());
@@ -90,6 +91,9 @@ export class DbCollection<RecordType extends Record = Record> {
   #worker: SqliteWorkerClient;
   #records: Map<string, RecordType>;
   #auditRecords: Map<string, AuditOf<RecordType>>;
+  // Shadow set of record ids whose audit currently has pending changes.
+  // Keeps getPendingStatesSync O(pending) instead of O(all records).
+  #pendingIds: Set<string>;
   #loadingPromise: Promise<void>;
   #callbacks: Set<(event: MXDBCollectionEvent<RecordType>) => void>;
 
@@ -154,11 +158,12 @@ export class DbCollection<RecordType extends Record = Record> {
   @bind
   public getPendingStatesSync(): Array<MXDBActiveRecordState<RecordType> | MXDBDeletedRecordState> {
     const out: Array<MXDBActiveRecordState<RecordType> | MXDBDeletedRecordState> = [];
-    for (const audit of this.#auditRecords.values()) {
-      if (!auditor.hasPendingChanges(audit)) continue;
-      const record = this.#records.get(audit.id);
+    for (const id of this.#pendingIds) {
+      const audit = this.#auditRecords.get(id);
+      if (audit == null) continue; // stale entry; shouldn't happen but guard
+      const record = this.#records.get(id);
       if (record != null) out.push({ record, audit: audit.entries });
-      else out.push({ recordId: audit.id, audit: audit.entries });
+      else out.push({ recordId: id, audit: audit.entries });
     }
     return out;
   }
@@ -193,6 +198,7 @@ export class DbCollection<RecordType extends Record = Record> {
     this.#records.set(record.id, record);
     const branchedAudit = auditor.createBranchFrom<RecordType>(record.id, lastAuditEntryId);
     this.#auditRecords.set(record.id, branchedAudit);
+    this.#pendingIds.delete(record.id); // Branched audit has no pending changes
     this.#logger?.silly(`[db-diag] applyServerWriteSync "${this.#name}" id=${record.id} anchor=${lastAuditEntryId} auditRecordsSizeAfter=${this.#auditRecords.size} recordsSizeAfter=${this.#records.size}`);
     void this.#persist([record], [branchedAudit]);
     this.#invokeOnChange({ type: 'upsert', records: [record], auditAction: 'branched' });
@@ -238,6 +244,7 @@ export class DbCollection<RecordType extends Record = Record> {
       if (hadLive || audit != null) fullyRemoved.push(id);
       if (audit != null) {
         this.#auditRecords.delete(id);
+        this.#pendingIds.delete(id);
         fullyRemovedAuditIds.push(id);
       }
     }
@@ -262,6 +269,7 @@ export class DbCollection<RecordType extends Record = Record> {
     if (existing == null) return;
     const collapsed = auditor.collapseToAnchor(existing, anchorUlid);
     this.#auditRecords.set(recordId, collapsed);
+    this.#setPendingId(recordId, collapsed);
     void this.#persistAudits([collapsed]);
   }
 
@@ -303,6 +311,7 @@ export class DbCollection<RecordType extends Record = Record> {
       newAuditRecord = auditor.createAuditFrom(record);
     }
     this.#auditRecords.set(record.id, newAuditRecord);
+    this.#setPendingId(record.id, newAuditRecord);
 
     void this.#persist([record], [newAuditRecord]);
     this.#invokeOnChange({ type: 'upsert', records: [record], auditAction });
@@ -317,6 +326,7 @@ export class DbCollection<RecordType extends Record = Record> {
     if (existingAudit == null) return;
     const newAudit = auditor.collapseToAnchor(existingAudit, anchorUlid);
     this.#auditRecords.set(recordId, newAudit);
+    this.#setPendingId(recordId, newAudit);
     this.#logger?.silly('collapsed audit', { recordId, anchorUlid, existingAudit, newAudit });
     this.#persistAudits([newAudit]);
   }
@@ -350,6 +360,7 @@ export class DbCollection<RecordType extends Record = Record> {
         if (auditRecord != null) {
           const deletedAudit = auditor.delete(auditRecord);
           this.#auditRecords.set(id, deletedAudit);
+          this.#setPendingId(id, deletedAudit);
           auditsToPersist.push(deletedAudit);
         }
       }
@@ -372,6 +383,7 @@ export class DbCollection<RecordType extends Record = Record> {
     if (idArr.length === 0) return;
     for (const id of idArr) {
       this.#auditRecords.delete(id);
+      this.#pendingIds.delete(id);
     }
     await this.#deleteAuditRowsOnly(idArr);
   }
@@ -435,11 +447,12 @@ export class DbCollection<RecordType extends Record = Record> {
     await this.#loadingPromise;
     if (auditAction === 'preserveWithHistory') {
       const recordIdsToClear = this.#auditRecords.toValuesArray().mapWithoutNull(
-        auditRecord => !auditor.hasPendingChanges(auditRecord) ? auditRecord.id : undefined
+        auditRecord => !this.#pendingIds.has(auditRecord.id) ? auditRecord.id : undefined
       );
       recordIdsToClear.forEach(id => {
         this.#records.delete(id);
         this.#auditRecords.delete(id);
+        this.#pendingIds.delete(id);
       });
       void this.#deleteRecords(recordIdsToClear, true);
       this.#invokeOnChange({ type: 'clear', ids: recordIdsToClear });
@@ -448,6 +461,7 @@ export class DbCollection<RecordType extends Record = Record> {
     const ids = Array.from(this.#records.keys());
     this.#records.clear();
     this.#auditRecords.clear();
+    this.#pendingIds.clear();
     void this.#clearAll();
     this.#invokeOnChange({ type: 'clear', ids });
   }
@@ -475,7 +489,7 @@ export class DbCollection<RecordType extends Record = Record> {
   @bind
   public async hasPendingAudits(): Promise<boolean> {
     await this.#loadingPromise;
-    return Array.from(this.#auditRecords.values()).some(a => auditor.hasPendingChanges(a));
+    return this.#pendingIds.size > 0;
   }
 
   @bind
@@ -501,6 +515,17 @@ export class DbCollection<RecordType extends Record = Record> {
     this.#callbacks.forEach(callback => callback(event));
   }
 
+  // ─── Private: pending-ids tracking ───────────────────────────────────────
+
+  /** Keep #pendingIds in sync after any audit change for `id`. */
+  #setPendingId(id: string, audit: AuditOf<RecordType>): void {
+    if (auditor.hasPendingChanges(audit)) {
+      this.#pendingIds.add(id);
+    } else {
+      this.#pendingIds.delete(id);
+    }
+  }
+
   // ─── Private: load from SQLite on startup ────────────────────────────────
 
   async #loadData() {
@@ -520,6 +545,11 @@ export class DbCollection<RecordType extends Record = Record> {
     this.#auditRecords = new Map(
       Array.from(grouped.entries()).map(([recordId, rows]) => [recordId, rowsToAuditOf<RecordType>(recordId, rows)])
     );
+    // Rebuild pending-ids index from freshly loaded audits.
+    this.#pendingIds.clear();
+    for (const audit of this.#auditRecords.values()) {
+      if (auditor.hasPendingChanges(audit)) this.#pendingIds.add(audit.id);
+    }
   }
 
   // ─── Private: fire-and-forget SQLite writes ───────────────────────────────

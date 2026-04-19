@@ -2,11 +2,13 @@ import type Router from 'koa-router';
 import type { ParameterizedContext } from 'koa';
 import type { MXDBInitialRegistrationResponse, MXDBRegistrationPayload, MXDBUserDetails } from '../../common/models';
 import { ApiError, is } from '@anupheaus/common';
-import { inviteRateLimiter } from './RateLimiter';
 import type { ServerDb } from '../providers/db/ServerDb';
 import { AuthCollection } from './AuthCollection';
 import type { ULID } from 'ulidx';
 import { decodeTime, ulid } from 'ulidx';
+import { withSecurity } from '@anupheaus/socket-api/server';
+
+const INVITE_RATE_LIMIT = { maxRequests: 5, windowMs: 15 * 60 * 1000, message: 'Too many invite redemption attempts. Please wait before trying again.' };
 
 function getRequestId(ctx: ParameterizedContext) {
   const requestId = ctx.query.requestId as string;
@@ -34,8 +36,9 @@ async function findInviteByRegistrationToken(authColl: AuthCollection, registrat
 }
 
 export function registerAuthInviteRoute(router: Router, name: string, db: ServerDb, inviteLinkTTLMs: number, onGetUserDetails: (userId: string) => Promise<MXDBUserDetails>) {
-  router.get(`/${name}/register`, async ctx => {
-    if (!inviteRateLimiter.check(ctx.ip, 'first-stage-registration')) throw new ApiError({ message: 'Too many invite redemption attempts. Please wait before trying again.' });
+  const inviteSecurity = withSecurity({ rateLimit: INVITE_RATE_LIMIT });
+
+  router.get(`/${name}/register`, inviteSecurity, async ctx => {
     const requestId = getRequestId(ctx);
     validateTTL(requestId, inviteLinkTTLMs);
     const authColl = new AuthCollection(db);
@@ -50,8 +53,7 @@ export function registerAuthInviteRoute(router: Router, name: string, db: Server
     ctx.status = 200;
   });
 
-  router.post(`/${name}/register`, async ctx => {
-    if (!inviteRateLimiter.check(ctx.ip, 'second-stage-registration')) throw new ApiError({ message: 'Too many invite redemption attempts. Please wait before trying again.' });
+  router.post(`/${name}/register`, inviteSecurity, async ctx => {
     const payload = ctx.request.body as MXDBRegistrationPayload;
     if (!is.plainObject(payload)) throw new ApiError({ message: 'Invalid registration payload.' });
     const { registrationToken, deviceDetails, keyHash } = payload;

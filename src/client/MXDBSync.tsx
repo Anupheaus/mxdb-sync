@@ -56,7 +56,7 @@ export const MXDBSync = createComponent('MXDBSync', ({
           host={host}
           onPrf={(userId, prfOutput) => onPrfRef.current?.(userId, prfOutput)}
           onDeviceDisabled={onDeviceDisabled}
-          onSignedIn={onSignedIn as any}
+          onSignedIn={onSignedIn ? (user) => onSignedIn(user as MXDBUserDetails) : undefined}
           onSignedOut={onSignedOut}
         >
           <MXDBSyncInner

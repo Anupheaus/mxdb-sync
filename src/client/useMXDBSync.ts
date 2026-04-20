@@ -3,7 +3,7 @@ import { useSocketAPI } from '@anupheaus/socket-api/client';
 import { useSyncState } from './providers/client-to-server/SyncStateContext';
 
 export function useMXDBSync() {
-  const { getIsConnected, onConnectionStateChanged, getSocket, testDisconnect, testReconnect } = useSocketAPI();
+  const { getIsConnected, onConnectionStateChanged, getSocket, disconnect, connect } = useSocketAPI();
   const [isConnected, setIsConnected] = useState(useMemo(() => getIsConnected(), []));
   const { isSyncing, onSyncStateChanged } = useSyncState();
   const updateWhenChangedRef = useRef(false);
@@ -28,7 +28,7 @@ export function useMXDBSync() {
     get isConnected() { updateWhenChangedRef.current = true; return isConnected; },
     get clientId() { updateWhenChangedRef.current = true; return clientId; },
     onConnectionStateChanged,
-    testDisconnect,
-    testReconnect,
+    disconnect,
+    connect,
   };
 }

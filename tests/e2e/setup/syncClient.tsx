@@ -59,7 +59,7 @@ const SyncClientDriverInner = forwardRef<SyncClientDriverRef, { clientId: string
     // Ensure a live query subscription exists so the real sync pipeline is exercised.
     // (Without an active query/subscription, some setups won't push local mutations to the server.)
     useQuery();
-    const { testDisconnect, testReconnect, isSynchronising } = useMXDBSync();
+    const { disconnect, connect, isSynchronising } = useMXDBSync();
     const { getIsConnected, getSocket } = useSocketAPI();
     const c2sInstance = useClientToServerSyncInstance();
     const { db } = useDb();
@@ -140,11 +140,11 @@ const SyncClientDriverInner = forwardRef<SyncClientDriverRef, { clientId: string
           return true;
         },
         async disconnect() {
-          testDisconnect();
+          disconnect();
           await waitUntilAsync(async () => !getIsConnected(), 'Client disconnected', 30_000);
         },
         async reconnect() {
-          testReconnect();
+          connect();
           await waitUntilAsync(async () => getIsConnected(), 'Client reconnected', 30_000);
         },
         getIsConnected,
@@ -175,7 +175,7 @@ const SyncClientDriverInner = forwardRef<SyncClientDriverRef, { clientId: string
         },
         getDistinctSnapshot: () => distinctSnapshotRef.current,
       }),
-      [get, getAll, query, distinct, upsert, collectionRemove, testDisconnect, testReconnect, getIsConnected, isSynchronising, c2sInstance, db],
+      [get, getAll, query, distinct, upsert, collectionRemove, disconnect, connect, getIsConnected, isSynchronising, c2sInstance, db],
     );
 
     return null;

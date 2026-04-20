@@ -40,6 +40,9 @@
       ],
       "@anupheaus/socket-api/common": [
         "../socket-api/src/common",
+      ],
+      "@anupheaus/socket-api/common/auth": [
+        "../socket-api/src/common/auth",
       ]
     }
   },

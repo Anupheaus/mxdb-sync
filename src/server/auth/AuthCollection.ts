@@ -6,96 +6,92 @@
  */
 
 import type { Collection } from 'mongodb';
-import type { MXDBAuthRecord } from '../../common/models';
+import type { WebAuthnAuthRecord, WebAuthnAuthStore } from '@anupheaus/socket-api/common/auth';
 import type { ServerDb } from '../providers';
 
 const COLLECTION_NAME = 'mxdb_authentication';
 
-type AuthDoc = Omit<MXDBAuthRecord, 'requestId'> & { _id: string; };
+type AuthDoc = Omit<WebAuthnAuthRecord, 'requestId'> & { _id: string };
 
-function toDoc(record: MXDBAuthRecord): AuthDoc {
+function toDoc(record: WebAuthnAuthRecord): AuthDoc {
   const { requestId, ...rest } = record;
   return { _id: requestId, ...rest };
 }
 
-function fromDoc(doc: AuthDoc): MXDBAuthRecord {
+function fromDoc(doc: AuthDoc): WebAuthnAuthRecord {
   const { _id, ...rest } = doc;
   return { requestId: _id, ...rest };
 }
 
-export class AuthCollection {
+export class AuthCollection implements WebAuthnAuthStore {
   constructor(db: ServerDb) {
-    this.#coll = this.#getOrCreateCollection(db);
+    this.#coll = this.#init(db);
   }
 
   #coll: Promise<Collection<AuthDoc>>;
 
-  async #getOrCreateCollection(serverDb: ServerDb): Promise<Collection<AuthDoc>> {
+  async #init(serverDb: ServerDb): Promise<Collection<AuthDoc>> {
     const db = await serverDb.getMongoDb();
     const names = await db.listCollections({ name: COLLECTION_NAME }).toArray();
     if (names.length === 0) {
       const coll = await db.createCollection<AuthDoc>(COLLECTION_NAME);
       await coll.createIndex({ userId: 1 });
-      await coll.createIndex({ currentToken: 1 }, { sparse: true });
-      await coll.createIndex({ pendingToken: 1 }, { sparse: true });
+      await coll.createIndex({ sessionToken: 1 }, { sparse: true });
+      await coll.createIndex({ deviceId: 1 }, { sparse: true });
       await coll.createIndex({ keyHash: 1 }, { sparse: true });
       return coll;
     }
     return db.collection<AuthDoc>(COLLECTION_NAME);
   }
 
-  async create(record: MXDBAuthRecord): Promise<void> {
+  async create(record: WebAuthnAuthRecord): Promise<void> {
     const coll = await this.#coll;
     await coll.insertOne(toDoc(record));
   }
 
-  async findByRequestId(requestId: string): Promise<MXDBAuthRecord | undefined> {
+  async findById(requestId: string): Promise<WebAuthnAuthRecord | undefined> {
     const coll = await this.#coll;
-    const doc = await coll.findOne({ _id: requestId });
+    const doc = await coll.findOne({ _id: requestId } as any);
     return doc ? fromDoc(doc) : undefined;
   }
 
-  async findByRegistrationToken(registrationToken: string): Promise<MXDBAuthRecord | undefined> {
+  async findBySessionToken(token: string): Promise<WebAuthnAuthRecord | undefined> {
     const coll = await this.#coll;
-    const doc = await coll.findOne({ registrationToken });
+    const doc = await coll.findOne({ sessionToken: token } as any);
     return doc ? fromDoc(doc) : undefined;
   }
 
-  /** Looks up a record by `pendingToken` or `currentToken` (checked in that order). */
-  async findByToken(token: string): Promise<MXDBAuthRecord | undefined> {
+  async findByDevice(userId: string, deviceId: string): Promise<WebAuthnAuthRecord | undefined> {
     const coll = await this.#coll;
-    const doc = await coll.findOne({ $or: [{ pendingToken: token }, { currentToken: token }] } as any);
+    const doc = await coll.findOne({ userId, deviceId } as any);
     return doc ? fromDoc(doc) : undefined;
   }
 
-  async findByKeyHash(keyHash: string): Promise<MXDBAuthRecord | undefined> {
+  async findByRegistrationToken(registrationToken: string): Promise<WebAuthnAuthRecord | undefined> {
+    const coll = await this.#coll;
+    const doc = await coll.findOne({ registrationToken } as any);
+    return doc ? fromDoc(doc) : undefined;
+  }
+
+  async findByKeyHash(keyHash: string): Promise<WebAuthnAuthRecord | undefined> {
     const coll = await this.#coll;
     const doc = await coll.findOne({ keyHash } as any);
     return doc ? fromDoc(doc) : undefined;
   }
 
-  async findByUserId(userId: string): Promise<MXDBAuthRecord[]> {
+  async findByUserId(userId: string): Promise<WebAuthnAuthRecord[]> {
     const coll = await this.#coll;
     const docs = await coll.find({ userId } as any).toArray();
     return docs.map(fromDoc);
   }
 
-  async upsert(record: MXDBAuthRecord): Promise<void> {
+  async update(requestId: string, patch: Partial<WebAuthnAuthRecord>): Promise<void> {
     const coll = await this.#coll;
-    await coll.replaceOne({ _id: record.requestId } as any, toDoc(record), { upsert: true });
-  }
-
-  async update(requestId: string, patch: Partial<Omit<MXDBAuthRecord, 'requestId'>>): Promise<void> {
-    const coll = await this.#coll;
-    // Build $set and $unset from the patch
     const setFields: Record<string, unknown> = {};
     const unsetFields: Record<string, 1> = {};
     for (const [key, value] of Object.entries(patch)) {
-      if (value === undefined) {
-        unsetFields[key] = 1;
-      } else {
-        setFields[key] = value;
-      }
+      if (value === undefined) unsetFields[key] = 1;
+      else setFields[key] = value;
     }
     const update: Record<string, unknown> = {};
     if (Object.keys(setFields).length > 0) update['$set'] = setFields;

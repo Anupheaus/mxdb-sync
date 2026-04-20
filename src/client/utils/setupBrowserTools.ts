@@ -43,8 +43,15 @@ export function setupBrowserTools(appName: string) {
 
   // Dev-only auth bypass tools — eliminated entirely in production builds
   if (process.env.NODE_ENV !== 'production') {
-    tools['setDevAuth'] = (token: string, keyHash: string) => {
-      localStorage.setItem(`mxdb:dev-auth:${appName}`, JSON.stringify({ token, keyHash }));
+    tools['setDevAuth'] = async (userId: string) => {
+      const res = await fetch(`/${appName}/dev/signin`, {
+        method: 'POST',
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ userId }),
+      });
+      if (!res.ok) throw new Error(`Dev auth failed: ${res.status}`);
+      localStorage.setItem(`mxdb:dev-auth:${appName}`, JSON.stringify({ userId }));
       window.location.reload();
     };
     tools['clearDevAuth'] = () => {

@@ -21,7 +21,6 @@ describe('e2e setup harness (smoke)', () => {
     await client.upsert({
       id,
       clientId: 'a',
-      updatedAt: Date.now(),
       value: 'smoke',
     });
     const server = useServer();

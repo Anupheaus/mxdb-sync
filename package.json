@@ -63,7 +63,8 @@
     "test": "vitest",
     "test:crud": "vitest run --config vitest.e2e.config.ts --mode crud",
     "test:performance": "vitest run --config vitest.e2e.config.ts --mode performance",
-    "test:stress": "vitest run --config vitest.e2e.config.ts --mode stress"
+    "test:stress": "vitest run --config vitest.e2e.config.ts --mode stress",
+    "test:all": "node scripts/run-all-tests.mjs"
   },
   "files": [
     "dist",

@@ -1,4 +1,4 @@
-import { useAuthentication } from '@anupheaus/socket-api/server';
+import { useSocketAPI } from '@anupheaus/socket-api/server';
 import type { MXDBUserDetails } from '../../common/models';
 
 export interface UseAuthResult {
@@ -9,5 +9,11 @@ export interface UseAuthResult {
 }
 
 export function useAuth(): UseAuthResult {
-  return useAuthentication<MXDBUserDetails>();
+  const api = useSocketAPI<MXDBUserDetails>();
+  return {
+    get user() { return api.user; },
+    setUser: api.setUser,
+    signOut: api.signOut,
+    createInvite: api.createInvite,
+  };
 }

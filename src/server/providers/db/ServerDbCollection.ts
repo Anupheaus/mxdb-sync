@@ -637,7 +637,7 @@ export class ServerDbCollection<RecordType extends Record = Record> {
 
   #getActingUserId(): string {
     try {
-      const id = useSocketAPI().getUser()?.id;
+      const id = useSocketAPI().user?.id;
       if (id != null && String(id).length > 0) return String(id);
     } catch {
       // No socket context (e.g. background job)

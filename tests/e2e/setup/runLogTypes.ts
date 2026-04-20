@@ -41,7 +41,9 @@ export type RunLogEvent =
   | 'sync_idle_snapshot'
   /** Per-record drill-down when a validation report fails. */
   | 'validation_record_detail'
-  | 'error';
+  | 'error'
+  /** Unhandled rejection suppressed as harmless (e.g. socket disconnect noise). */
+  | 'suppressed_rejection';
 
 export interface RunLogDetail {
   [key: string]: unknown;

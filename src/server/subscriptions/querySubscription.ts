@@ -21,7 +21,7 @@ export const serverQuerySubscription = createServerCollectionSubscription<string
     const extensions = dbCollection.collection != null ? getCollectionExtensions(dbCollection.collection) : undefined;
     let baseRequest: DataRequest = { filters, pagination, sorts };
     if (extensions?.onQuery != null) {
-      const userId = (() => { try { return useSocketAPI().getUser()?.id; } catch { return undefined; } })();
+      const userId = (() => { try { return useSocketAPI().user?.id; } catch { return undefined; } })();
       const modified = await extensions.onQuery({ request: baseRequest, userId });
       if (modified != null) baseRequest = modified;
     }

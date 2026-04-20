@@ -1,6 +1,6 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { AuditEntryType } from '../../src/common/auditor';
-import type { SyncTestRecord } from '../sync-test/types';
+import type { E2eTestRecord } from './setup';
 import {
   auditEntryTypesChronological,
   resetE2E,
@@ -32,10 +32,9 @@ describe('e2e deletions regression tests', () => {
     await Promise.all([a.connect(), b.connect()]);
 
     const id = `e2e-del-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
-    const created: SyncTestRecord = {
+    const created: E2eTestRecord = {
       id,
       clientId: 'a',
-      updatedAt: Date.now(),
       value: 'created-by-a',
     };
 
@@ -45,7 +44,7 @@ describe('e2e deletions regression tests', () => {
     // Equivalent to useGetAll: full-collection subscription so B receives the row from the server.
     await b.subscribeGetAll();
     await waitUntilAsync(
-      async () => (await b.getLocal(id)) != null,
+      async () => (await b.getLocalRecord(id)) != null,
       'B local row after get-all subscription',
       30_000,
     );
@@ -56,10 +55,9 @@ describe('e2e deletions regression tests', () => {
     await a.remove(id);
     await waitForLiveRecordAbsent(id);
 
-    const offlineEdit: SyncTestRecord = {
+    const offlineEdit: E2eTestRecord = {
       ...created,
       clientId: 'b',
-      updatedAt: Date.now() + 1,
       value: 'b-offline-after-server-delete',
     };
     await b.upsert(offlineEdit);
@@ -69,8 +67,8 @@ describe('e2e deletions regression tests', () => {
 
     await waitForAllClientsIdle([a, b]);
 
-    expect(await a.getLocal(id)).toBeUndefined();
-    expect(await b.getLocal(id)).toBeUndefined();
+    expect(await a.getLocalRecord(id)).toBeUndefined();
+    expect(await b.getLocalRecord(id)).toBeUndefined();
 
     const audits = await useServer().readAudits();
     const audit = audits.get(id);
@@ -97,10 +95,9 @@ describe('e2e deletions regression tests', () => {
     await Promise.all([a.connect(), b.connect()]);
 
     const id = `e2e-del-offline-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
-    const created: SyncTestRecord = {
+    const created: E2eTestRecord = {
       id,
       clientId: 'a',
-      updatedAt: Date.now(),
       value: 'created-by-a',
     };
 
@@ -109,7 +106,7 @@ describe('e2e deletions regression tests', () => {
 
     await b.subscribeGetAll();
     await waitUntilAsync(
-      async () => (await b.getLocal(id)) != null,
+      async () => (await b.getLocalRecord(id)) != null,
       'B local row after get-all subscription',
       30_000,
     );
@@ -125,6 +122,6 @@ describe('e2e deletions regression tests', () => {
 
     await waitForAllClientsIdle([a, b]);
 
-    expect(await b.getLocal(id)).toBeUndefined();
+    expect(await b.getLocalRecord(id)).toBeUndefined();
   }, 120_000);
 });

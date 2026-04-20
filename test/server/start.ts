@@ -10,7 +10,6 @@ import { configureAuth } from './configureAuth';
 import { collections } from '../common';
 import './configureExtensions';
 import { actions } from './configureActions';
-import { privateKey } from './private-key';
 import { waitForBindablePort } from './waitForBindablePort';
 
 const mongoDbName = process.env.MONGO_DB_NAME as string;
@@ -34,7 +33,7 @@ const server = http.createServer();
 async function start() {
   try {
     await waitForBindablePort(port, logger);
-    const { app, createInviteLink } = await startServer({
+    const { app, createInvite } = await startServer({
       name: 'mxdb-sync-test',
       logger,
       collections,
@@ -42,7 +41,6 @@ async function start() {
       server,
       mongoDbName,
       mongoDbUrl,
-      privateKey,
       clientLoggingService: () => loggerService,
       onGetUserDetails: async (userId) => ({
         id: userId,
@@ -51,7 +49,7 @@ async function start() {
       }),
     });
     configureStaticFiles(app as any);
-    configureAuth(app as any, createInviteLink);
+    configureAuth(app as any, createInvite);
     configureViews(app as any);
     server.on('error', error => { logger.error(error); server.close(); });
     server.listen(port, () => { logger.info(`Server listening on port ${port}...`); });

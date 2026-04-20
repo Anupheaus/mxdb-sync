@@ -1,5 +1,4 @@
 export function setupBrowserTools(appName: string) {
-  // Setup some tools we can use in the browser
   const tools: Record<string, unknown> = {
     async listDatabases() {
       const getDirectory = globalThis.navigator?.storage?.getDirectory?.bind(globalThis.navigator?.storage) as undefined | (() => Promise<FileSystemDirectoryHandle>);

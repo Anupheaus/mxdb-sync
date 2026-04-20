@@ -173,7 +173,7 @@ describe('auditor core API', () => {
       const logger = { warn: (m: string) => { warns.push(m); } } as import('@anupheaus/common').Logger;
       expect(auditor.isAudit(syncPending, true, logger)).toBe(false);
       expect(warns).toHaveLength(1);
-      expect(warns[0]).toMatch(/isAudit\(fullAudit=true\)/);
+      expect(warns[0]).toMatch(/isAudit rejected .* fullAudit=true/);
     });
   });
 

@@ -160,24 +160,44 @@ The sync test provides a controlled environment to identify and fix data integri
 
 ## Running "All" Tests
 
-When the user asks to run "all" tests, run the following four suites **sequentially** (each as a separate Bash call), recording the wall-clock duration and exit status of each:
+When the user asks to run "all" tests, **do NOT invoke the suites individually**. Run the single orchestrator script:
 
-| Suite       | Command                  |
-|-------------|--------------------------|
-| Unit        | `pnpm test`              |
-| CRUD        | `pnpm test:crud`         |
-| Performance | `pnpm test:performance`  |
-| Stress      | `pnpm test:stress`       |
+```
+pnpm test:all
+```
 
-After all four have finished, output a **summary table** in this format:
+(equivalent: `node scripts/run-all-tests.mjs`)
 
-| Suite       | Status | Duration |
-|-------------|--------|----------|
-| Unit        | ✅ Pass / ❌ Fail | Xs |
-| CRUD        | ✅ Pass / ❌ Fail | Xs |
-| Performance | ✅ Pass / ❌ Fail | Xs |
-| Stress      | ✅ Pass / ❌ Fail | Xs |
+The script runs Unit, CRUD, Performance, and Stress sequentially, records the wall-clock duration and pass/fail counts of each, and prints a machine-readable JSON block to stdout between `=== RESULTS_JSON_BEGIN ===` and `=== RESULTS_JSON_END ===` markers.
 
-- **Status**: ✅ Pass if the command exited 0, ❌ Fail otherwise.
-- **Duration**: wall-clock time for that suite (e.g. `42s`, `2m 3s`).
-- Always run all four suites even if an earlier one fails, so the full picture is visible.
+**How to report the results back to the user:**
+
+1. Run `pnpm test:all` via the Bash tool. The suites are long-running (especially Stress) — use a generous timeout.
+2. Locate the `=== RESULTS_JSON_BEGIN ===` / `=== RESULTS_JSON_END ===` block in the output.
+3. Parse the JSON. The shape is:
+   ```json
+   {
+     "schema": "mxdb-sync.test-run.v1",
+     "totalWallMs": 123456,
+     "suites": [
+       { "key": "unit", "label": "...", "exitCode": 0, "durationMs": 1234,
+         "tests": { "passed": 42, "failed": 0, "skipped": 0, "total": 42 } }
+     ]
+   }
+   ```
+4. Render a table like:
+
+   | Suite       | Status | Tests          | Duration |
+   |-------------|--------|----------------|----------|
+   | Unit        | ✅      | 42/42 passed   | 1.2s     |
+   | CRUD        | ✅      | 18/18 passed   | 14.3s    |
+   | Performance | ❌      | 5/6 passed (1 failed) | 32.7s |
+   | Stress      | ✅      | 3/3 passed     | 4m 12.1s |
+
+   - **Status**: ✅ if `exitCode === 0`, ❌ otherwise.
+   - **Tests**: `passed/total passed`, append `(N failed)` / `(N skipped)` if non-zero. If a suite's summary could not be parsed (`parsed: false`), show `(summary unavailable)`.
+   - **Duration**: format `durationMs` as `Xms`, `X.XXs`, or `Xm X.Xs` as appropriate.
+
+5. Always report all four rows even if the script exited non-zero — the full picture is more useful than early termination.
+
+**Do not run the individual `pnpm test`, `pnpm test:crud`, etc. commands for an "all tests" request** — the orchestrator is the single source of truth for this workflow.

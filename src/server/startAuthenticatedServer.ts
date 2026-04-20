@@ -2,7 +2,7 @@ import type { ServerDb } from './providers';
 import { setServerToClientSync } from './providers';
 import { seedCollections } from './seeding';
 import { internalActions } from './actions';
-import { startServer as startSocketServer, useSocketAPI, useAction } from '@anupheaus/socket-api/server';
+import { startServer as startSocketServer, useAction } from '@anupheaus/socket-api/server';
 import { defineAuthentication } from '@anupheaus/socket-api/server';
 import { internalSubscriptions } from './subscriptions';
 import { addClientWatches, removeClientWatches } from './clientDbWatches';
@@ -76,7 +76,7 @@ export async function startAuthenticatedServer({
         if (shouldSeedCollections === true) {
           await seedCollections(collections);
         }
-        console.log(`Seeding took ${Date.now() - startTime}ms`); // eslint-disable-line no-console
+        startupLogger.info(`Seeding took ${Date.now() - startTime}ms`);
         if (config.onStartup != null) await config.onStartup();
       });
       logger?.info('[startAuthenticatedServer] onStartup.done');

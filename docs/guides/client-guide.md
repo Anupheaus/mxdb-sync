@@ -85,7 +85,7 @@ Local mutations go through **`DbCollection`**, which **`ClientToServerProvider`*
 
 - **`isConnected`**, **`clientId`**
 - **`onConnectionStateChanged`** (from socket-api)
-- **`testDisconnect`**, **`testReconnect`** (testing helpers)
+- **`disconnect`**, **`connect`** (testing helpers)
 - **`isSynchronising`** — tracks sync state via **`SyncStateContext`**
 
 **`ClientToServerSyncProvider`** wires **`onConnectionStateChanged`** into **`ClientToServerSynchronisation.setConnected`** and **closes** the synchroniser on unmount.

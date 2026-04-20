@@ -1,21 +1,23 @@
 import { createComponent } from '@anupheaus/react-ui';
 import type { ReactNode } from 'react';
-import type { MXDBCollection, MXDBError, UnauthorisedOperationDetails } from '../common';
+import { useEffect, useMemo, useRef } from 'react';
 import type { Logger } from '@anupheaus/common';
-import { useEffect, useMemo } from 'react';
 import { LoggerProvider } from '@anupheaus/react-ui';
-import { IndexedDbProvider } from './auth/IndexedDbProvider';
-import { AuthProvider } from './auth/AuthProvider';
+import { SocketAPI } from '@anupheaus/socket-api/client';
 import { ConflictResolutionContext } from './providers';
+import { MXDBSyncInner } from './auth/MXDBSyncInner';
 import { setupBrowserTools } from './utils/setupBrowserTools';
+import type { MXDBCollection, MXDBError } from '../common';
+import type { MXDBUserDetails } from '../common/models';
 
 interface Props {
   host?: string;
   name: string;
   logger?: Logger;
   collections: MXDBCollection[];
-  onInvalidToken?(): Promise<void>;
-  onUnauthorisedOperation?(): Promise<UnauthorisedOperationDetails>;
+  onDeviceDisabled?(): void;
+  onSignedIn?(user: MXDBUserDetails): void;
+  onSignedOut?(): void;
   onError?(error: MXDBError): void;
   onConflictResolution?(message: string): Promise<boolean>;
   children?: ReactNode;
@@ -26,6 +28,9 @@ export const MXDBSync = createComponent('MXDBSync', ({
   name,
   logger,
   collections,
+  onDeviceDisabled,
+  onSignedIn,
+  onSignedOut,
   onError,
   onConflictResolution,
   children,
@@ -37,18 +42,35 @@ export const MXDBSync = createComponent('MXDBSync', ({
     }
   }
 
-  useEffect(() => { setupBrowserTools(name); }, []);
+  useEffect(() => { setupBrowserTools(name); }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   const conflictResolutionContext = useMemo(() => ({ onConflictResolution }), [onConflictResolution]);
+
+  const onPrfRef = useRef<((userId: string, prfOutput: ArrayBuffer) => void) | undefined>(undefined);
 
   return (
     <LoggerProvider logger={logger} loggerName="MXDB-Sync">
       <ConflictResolutionContext.Provider value={conflictResolutionContext}>
-        <IndexedDbProvider appName={name}>
-          <AuthProvider appName={name} host={host} collections={collections} onError={onError}>
+        <SocketAPI
+          name={name}
+          host={host}
+          onPrf={(userId, prfOutput) => onPrfRef.current?.(userId, prfOutput)}
+          onDeviceDisabled={onDeviceDisabled}
+          onSignedIn={onSignedIn as any}
+          onSignedOut={onSignedOut}
+        >
+          <MXDBSyncInner
+            appName={name}
+            collections={collections}
+            onPrfRef={onPrfRef}
+            onError={onError}
+            onDeviceDisabled={onDeviceDisabled}
+            onSignedIn={onSignedIn}
+            onSignedOut={onSignedOut}
+          >
             {children}
-          </AuthProvider>
-        </IndexedDbProvider>
+          </MXDBSyncInner>
+        </SocketAPI>
       </ConflictResolutionContext.Provider>
     </LoggerProvider>
   );

@@ -16,31 +16,17 @@ export interface ServerConfig extends StartSocketServerConfig {
   mongoDbName: string;
   clearDatabase?: boolean;
   shouldSeedCollections?: boolean;
-  /** Idle window (ms) before change stream events are dispatched. Default 20. */
   changeStreamDebounceMs?: number;
-  /** Called during invite redemption to fetch user details for the given userId. */
-  onGetUserDetails(userId: string): Promise<MXDBUserDetails>;
-  /** Invite link TTL in milliseconds. Default: 24 hours (86 400 000). */
-  inviteLinkTTLMs?: number;
-  /** Called after a client successfully authenticates. */
-  onConnected?(ctx: { user: MXDBUserDetails; deviceInfo: MXDBDeviceInfo }): PromiseMaybe<void>;
-  /**
-   * Called when an authenticated client disconnects.
-   * `reason` is `'signedOut'` when the client explicitly signed out,
-   * `'connectionLost'` for any other disconnect.
-   */
-  onDisconnected?(ctx: { user: MXDBUserDetails; deviceInfo: MXDBDeviceInfo; reason: 'signedOut' | 'connectionLost' }): PromiseMaybe<void>;
+  onGetUserDetails?(userId: string): Promise<MXDBUserDetails>;
+  onConnected?(ctx: { user: MXDBUserDetails }): PromiseMaybe<void>;
+  onDisconnected?(ctx: { user: MXDBUserDetails; reason: 'signedOut' | 'connectionLost' }): PromiseMaybe<void>;
 }
 
 export interface ServerInstance {
   app: Koa;
-  createInviteLink(userId: string, domain: string): Promise<string>;
+  createInvite(userId: string, baseUrl: string): Promise<string>;
   getDevices(userId: string): Promise<MXDBDeviceInfo[]>;
   enableDevice(requestId: string): Promise<void>;
   disableDevice(requestId: string): Promise<void>;
-  /** Cleanly close the MongoClient — call from SIGTERM/SIGINT handlers to release in-flight transaction locks. */
   close(): Promise<void>;
-  /** Dev-only: creates a bypass auth token for the given userId without WebAuthn.
-   *  Only populated when NODE_ENV !== 'production'. */
-  createDevToken?(userId: string): Promise<{ token: string; keyHash: string }>;
 }

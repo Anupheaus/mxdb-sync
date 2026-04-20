@@ -1,12 +1,6 @@
-// src/client/hooks/useMXDBSignOut.ts
-import { useContext, useCallback } from 'react';
-import { AuthContext } from '../auth/AuthContext';
+import { useAuthentication } from '@anupheaus/socket-api/client';
 
-export interface UseMXDBSignOutResult {
-  signOut(): void;
-}
-
-export function useMXDBSignOut(): UseMXDBSignOutResult {
-  const { signOut } = useContext(AuthContext);
-  return { signOut: useCallback(() => signOut(), [signOut]) };
+export function useMXDBSignOut(): { signOut(): Promise<void> } {
+  const { signOut } = useAuthentication();
+  return { signOut };
 }

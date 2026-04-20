@@ -1,15 +1,17 @@
-// src/client/hooks/useAuth.ts
-import { useContext } from 'react';
-import { AuthContext } from '../auth/AuthContext';
+import { useAuthentication } from '@anupheaus/socket-api/client';
 import type { MXDBUserDetails } from '../../common/models';
 
 export interface UseAuthResult {
   isAuthenticated: boolean;
   user: MXDBUserDetails | undefined;
-  signOut(): void;
+  signOut(): Promise<void>;
 }
 
 export function useAuth(): UseAuthResult {
-  const { isAuthenticated, user, signOut } = useContext(AuthContext);
-  return { isAuthenticated, user, signOut };
+  const { user, signOut } = useAuthentication<MXDBUserDetails>();
+  return {
+    isAuthenticated: user != null,
+    user,
+    signOut,
+  };
 }

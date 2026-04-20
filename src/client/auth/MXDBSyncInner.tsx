@@ -14,7 +14,6 @@ interface Props {
   collections: MXDBCollection[];
   onPrfRef: MutableRefObject<((userId: string, prfOutput: ArrayBuffer) => void) | undefined>;
   onError?(error: MXDBError): void;
-  onDeviceDisabled?(): void;
   onSignedIn?(user: MXDBUserDetails): void;
   onSignedOut?(): void;
   children?: ReactNode;

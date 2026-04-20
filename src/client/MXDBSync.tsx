@@ -64,7 +64,6 @@ export const MXDBSync = createComponent('MXDBSync', ({
             collections={collections}
             onPrfRef={onPrfRef}
             onError={onError}
-            onDeviceDisabled={onDeviceDisabled}
             onSignedIn={onSignedIn}
             onSignedOut={onSignedOut}
           >

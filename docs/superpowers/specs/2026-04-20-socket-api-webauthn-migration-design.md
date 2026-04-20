@@ -134,7 +134,6 @@ MXDBSync
 |------|--------|
 | `src/client/MXDBSync.tsx` | Restructured: wraps `SocketAPI`; props simplified (see §5) |
 | `src/client/useMXDBSync.ts` | `testDisconnect`/`testReconnect` → `disconnect`/`connect` |
-| `src/client/auth/AuthContext.ts` | Remove `register()`; keep `isAuthenticated`, `user`, `signOut` |
 
 ### Files added
 
@@ -142,6 +141,17 @@ MXDBSync
 |------|---------|
 | `src/client/auth/deriveKey.ts` | HKDF-SHA256 derivation from raw PRF output → `Uint8Array` AES key |
 | `src/client/auth/MXDBSyncInner.tsx` | Inner component; triggers reauth, holds key state, mounts `DbsProvider` |
+
+### Re-exports
+
+mxdb-sync re-exports socket-api's `useAuthentication` so consumers never need to import from `@anupheaus/socket-api` directly:
+
+```ts
+// src/client/index.ts
+export { useAuthentication } from '@anupheaus/socket-api';
+```
+
+`AuthContext.ts` is deleted entirely — no mxdb-sync auth context is kept. Consumers call `useAuthentication()` from the mxdb-sync package import and get socket-api's hook with full typing.
 
 ---
 
@@ -403,6 +413,7 @@ This path is stripped from production builds via `process.env.NODE_ENV` guards.
 - `src/client/auth/IndexedDbProvider.tsx`
 - `src/client/auth/IndexedDbContext.ts`
 - `src/client/auth/IndexedDbAuthStore.ts`
+- `src/client/auth/AuthContext.ts`
 - `src/client/auth/deriveEncryptionKey.ts`
 - `src/server/auth/registerAuthInviteRoute.ts`
 - `src/server/auth/TokenRotation.ts`

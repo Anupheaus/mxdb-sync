@@ -12,6 +12,61 @@
 import { spawn } from 'node:child_process';
 import { performance } from 'node:perf_hooks';
 import process from 'node:process';
+import os from 'node:os';
+
+// ─── Resource guard ───────────────────────────────────────────────────────────
+const CPU_THRESHOLD = 90;   // % — kill if CPU stays above this...
+const RAM_THRESHOLD = 90;   // % — ...or RAM stays above this
+const SUSTAINED_SECS = 10;  // ...for this many consecutive seconds
+
+const spawnedChildren = new Set();
+
+function getCpuSample() {
+  let idle = 0, total = 0;
+  for (const cpu of os.cpus()) {
+    for (const v of Object.values(cpu.times)) total += v;
+    idle += cpu.times.idle;
+  }
+  return { idle, total };
+}
+
+async function getCpuPercent() {
+  const s1 = getCpuSample();
+  await new Promise((r) => setTimeout(r, 200));
+  const s2 = getCpuSample();
+  const idleDiff = s2.idle - s1.idle;
+  const totalDiff = s2.total - s1.total;
+  return totalDiff === 0 ? 0 : Math.round((1 - idleDiff / totalDiff) * 100);
+}
+
+function getRamPercent() {
+  return Math.round((1 - os.freemem() / os.totalmem()) * 100);
+}
+
+function killAllChildren(reason) {
+  console.error(`\n[run-all-tests] RESOURCE GUARD: ${reason} — killing all test processes.\n`);
+  for (const child of spawnedChildren) {
+    try { child.kill('SIGKILL'); } catch { /* already dead */ }
+  }
+  process.exit(2);
+}
+
+let highLoadStreak = 0;
+const monitorInterval = setInterval(async () => {
+  const ram = getRamPercent();
+  const cpu = await getCpuPercent();
+  if (cpu >= CPU_THRESHOLD || ram >= RAM_THRESHOLD) {
+    highLoadStreak++;
+    console.error(`[resource-guard] High load: CPU ${cpu}%  RAM ${ram}%  (${highLoadStreak}/${SUSTAINED_SECS}s sustained)`);
+    if (highLoadStreak >= SUSTAINED_SECS) {
+      clearInterval(monitorInterval);
+      killAllChildren(`CPU ${cpu}% / RAM ${ram}% sustained for ${SUSTAINED_SECS}s`);
+    }
+  } else {
+    highLoadStreak = 0;
+  }
+}, 1000);
+monitorInterval.unref(); // don't keep the process alive after suites finish
 
 // ─── Suite definitions ────────────────────────────────────────────────────────
 // Key   → a short identifier shown in the table
@@ -73,6 +128,8 @@ function runSuite(suite) {
       env: { ...process.env, CI: '1', FORCE_COLOR: '0' }, // strip ANSI colour codes so parsers match cleanly
     });
 
+    spawnedChildren.add(child);
+
     let stdout = '';
     let stderr = '';
 
@@ -88,6 +145,7 @@ function runSuite(suite) {
     });
 
     child.on('close', (code) => {
+      spawnedChildren.delete(child);
       const durationMs = Math.round(performance.now() - startedAt);
       resolve({ exitCode: code ?? -1, durationMs, stdout, stderr });
     });
@@ -176,6 +234,7 @@ for (const suite of suitesToRun) {
 }
 
 const overallMs = Math.round(performance.now() - overallStart);
+clearInterval(monitorInterval);
 
 // ─── Summary (for the human running it locally) ───────────────────────────────
 console.error('\n──── Summary ────\n');

@@ -1,5 +1,6 @@
 import type { ServerDb } from './providers';
 import { setServerToClientSync } from './providers';
+import { registerClientS2C, unregisterClientS2C } from './providers/db/clientS2CStore';
 import { seedCollections } from './seeding';
 import { internalActions } from './actions';
 import { startServer as startSocketServer, useAction } from '@anupheaus/socket-api/server';
@@ -101,6 +102,7 @@ export async function startAuthenticatedServer({
         logger: s2cLogger,
       });
       clientS2CInstances.set(client, s2c);
+      registerClientS2C(client, s2c);
       setServerToClientSync(s2c);
       addClientWatches(client, collections, s2c);
       await onClientConnected?.(client);
@@ -108,6 +110,7 @@ export async function startAuthenticatedServer({
 
     onClientDisconnected: async client => {
       removeClientWatches(client);
+      unregisterClientS2C(client);
 
       const s2c = clientS2CInstances.get(client);
       if (s2c != null) {

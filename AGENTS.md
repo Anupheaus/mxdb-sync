@@ -97,7 +97,7 @@ MXDB-Sync is a real-time synchronization library for MongoDB-backed collections 
 Located in `tests/sync-test/`, this is a comprehensive data integrity test suite:
 
 ### Test Components
-- **50 simulated clients** using real React components and fake-indexeddb
+- **20 simulated clients** using real React components and fake-indexeddb
 - **MongoDB Memory Server** for isolated testing
 - **Records of Truth** tracking expected final state
 - **Integrity assertions** comparing server vs expected state

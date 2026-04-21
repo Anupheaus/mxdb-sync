@@ -1,5 +1,6 @@
 import { useImperativeHandle, forwardRef, useEffect, useRef } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
+import https from 'https';
 import { useMXDBSync } from '../../../src/client';
 import { useCollection } from '../../../src/client/hooks/useCollection';
 import {
@@ -20,6 +21,35 @@ import { useSocketAPI, SocketAPI } from '@anupheaus/socket-api/client';
 import { Logger } from '@anupheaus/common';
 import { LoggerProvider } from '@anupheaus/react-ui';
 import { waitUntilAsync } from './utils';
+
+/**
+ * Obtain a session token from the dev-auth bypass route. Uses https.request so it goes through
+ * the preload-tls.cjs patch that sets rejectUnauthorized=false for the self-signed test cert.
+ */
+function fetchDevSessionToken(serverUrl: string, userId: string): Promise<string | undefined> {
+  return new Promise<string | undefined>((resolve) => {
+    const body = JSON.stringify({ userId });
+    const [host, portStr] = serverUrl.split(':');
+    const port = portStr != null ? parseInt(portStr, 10) : 443;
+    const req = https.request({
+      hostname: host,
+      port,
+      path: `/${E2E_SOCKET_API_NAME}/dev/signin`,
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(body) },
+    }, (res) => {
+      if (res.statusCode !== 200) { resolve(undefined); return; }
+      const setCookie = res.headers['set-cookie'];
+      if (!setCookie) { resolve(undefined); return; }
+      const cookieStr = Array.isArray(setCookie) ? setCookie[0] : setCookie;
+      const match = cookieStr.match(/socketapi_session=([^;]+)/);
+      resolve(match?.[1] ?? undefined);
+    });
+    req.on('error', () => resolve(undefined));
+    req.write(body);
+    req.end();
+  });
+}
 
 export interface SyncClientDriverRef {
   get(recordId: string): Promise<E2eTestRecord | undefined>;
@@ -237,11 +267,14 @@ export function createSyncClient(
   const connectedPromise = new Promise<void>(resolve => {
     resolveConnected = resolve;
   });
+  let sessionToken: string | undefined;
 
-  function connect(serverUrl: string): Promise<void> {
+  async function connect(serverUrl: string): Promise<void> {
     if (container != null) {
       return connectedPromise;
     }
+    sessionToken ??= await fetchDevSessionToken(serverUrl, clientId);
+
     container = document.createElement('div');
     document.body.appendChild(container);
     root = createRoot(container);
@@ -252,7 +285,7 @@ export function createSyncClient(
 
     root.render(
       <LoggerProvider logger={reactTreeLogger} loggerName="MXDB-Sync">
-        <SocketAPI host={serverUrl} name={socketName}>
+        <SocketAPI host={serverUrl} name={socketName} auth={sessionToken != null ? { sessionToken } : undefined}>
           <DbsProvider name={dbName} collections={[e2eTestCollection]} encryptionKey={encryptionKey} logger={reactTreeLogger.createSubLogger('db')}>
             <ClientToServerSyncProvider collections={[e2eTestCollection]}>
               <ClientToServerProvider />

@@ -61,7 +61,12 @@ function pruneOldLogs(logsDir: string, prefix: string, keep: number): void {
     .sort();
   const toRemove = files.slice(0, -keep);
   for (const file of toRemove) {
-    fs.unlinkSync(path.join(logsDir, file));
+    try {
+      fs.unlinkSync(path.join(logsDir, file));
+    } catch (err) {
+      // parallel test workers may have already deleted this file — ignore
+      if ((err as NodeJS.ErrnoException).code !== 'ENOENT') throw err;
+    }
   }
 }
 

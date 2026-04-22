@@ -145,7 +145,7 @@ const SyncClientDriverInner = forwardRef<SyncClientDriverRef, { clientId: string
       ref,
       () => ({
         get(recordId: string) {
-          return get(recordId, { locallyOnly: false });
+          return get(recordId);
         },
         subscribeGetAll() {
           return getAll(
@@ -174,7 +174,7 @@ const SyncClientDriverInner = forwardRef<SyncClientDriverRef, { clientId: string
           await waitUntilAsync(async () => !getIsConnected(), 'Client disconnected', 30_000);
         },
         async reconnect() {
-          connect();
+          connect().catch(() => {}); // rejection handled by waitUntilAsync below
           await waitUntilAsync(async () => getIsConnected(), 'Client reconnected', 30_000);
         },
         getIsConnected,

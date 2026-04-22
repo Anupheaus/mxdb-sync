@@ -13,6 +13,25 @@ import { spawn } from 'node:child_process';
 import { performance } from 'node:perf_hooks';
 import process from 'node:process';
 import os from 'node:os';
+import fs from 'node:fs';
+import path from 'node:path';
+import { createRequire } from 'node:module';
+
+// On Windows, `process.execPath` may point through an NVM junction (symlink) such as
+// `C:\Program Files\nodejs\node.exe`. When a vitest child process spawns tinypool fork
+// workers using that symlink path, Windows CreateProcess can fail with ENOENT in cmd.exe
+// security contexts. Resolve to the real path so every spawn uses the concrete executable.
+const realNodePath = (() => {
+  try { return fs.realpathSync(process.execPath); }
+  catch { return process.execPath; }
+})();
+
+// Resolve the vitest entry point directly so we can invoke it with `node <vitest.mjs>`
+// instead of `npx vitest`, which avoids the `shell: true` requirement on Windows and
+// ensures the same real node binary is used for the outer launch and inner fork workers.
+const _require = createRequire(import.meta.url);
+const vitestPkgDir = path.dirname(_require.resolve('vitest/package.json'));
+const vitestEntry = path.join(vitestPkgDir, 'vitest.mjs');
 
 // ─── Resource guard ───────────────────────────────────────────────────────────
 const CPU_THRESHOLD = 90;   // % — kill if CPU stays above this...
@@ -79,26 +98,26 @@ const SUITES = [
   {
     key: 'unit',
     label: 'Unit tests',
-    cmd: 'npx',
-    args: ['vitest', 'run'],
+    cmd: realNodePath,
+    args: [vitestEntry, 'run'],
   },
   {
     key: 'crud',
     label: 'CRUD (e2e)',
-    cmd: 'npx',
-    args: ['vitest', 'run', '--config', 'vitest.e2e.config.ts', '--mode', 'crud'],
+    cmd: realNodePath,
+    args: [vitestEntry, 'run', '--config', 'vitest.e2e.config.ts', '--mode', 'crud'],
   },
   {
     key: 'performance',
     label: 'Performance',
-    cmd: 'npx',
-    args: ['vitest', 'run', '--config', 'vitest.e2e.config.ts', '--mode', 'performance'],
+    cmd: realNodePath,
+    args: [vitestEntry, 'run', '--config', 'vitest.e2e.config.ts', '--mode', 'performance'],
   },
   {
     key: 'stress',
     label: 'Stress',
-    cmd: 'npx',
-    args: ['vitest', 'run', '--config', 'vitest.e2e.config.ts', '--mode', 'stress'],
+    cmd: realNodePath,
+    args: [vitestEntry, 'run', '--config', 'vitest.e2e.config.ts', '--mode', 'stress'],
   },
 ];
 
@@ -124,7 +143,7 @@ function runSuite(suite) {
     const startedAt = performance.now();
     const child = spawn(suite.cmd, suite.args, {
       cwd: process.cwd(),
-      shell: process.platform === 'win32', // allow `npx` resolution on Windows
+      shell: false,
       env: { ...process.env, CI: '1', FORCE_COLOR: '0' }, // strip ANSI colour codes so parsers match cleanly
     });
 

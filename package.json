@@ -5,45 +5,45 @@
   "exports": {
     ".": {
       "node": {
-        "types": "./dist/server/index.d.ts",
-        "import": "./dist/server.js",
+        "types": "./dist/server.d.ts",
+        "import": "./dist/server.mjs",
         "require": "./dist/server.js"
       },
       "default": {
-        "types": "./dist/client/index.d.ts",
-        "import": "./dist/client.js",
+        "types": "./dist/client.d.ts",
+        "import": "./dist/client.mjs",
         "require": "./dist/client.js"
       }
     },
     "./server": {
-      "types": "./dist/server/index.d.ts",
-      "import": "./dist/server.js",
+      "types": "./dist/server.d.ts",
+      "import": "./dist/server.mjs",
       "require": "./dist/server.js"
     },
     "./client": {
-      "types": "./dist/client/index.d.ts",
-      "import": "./dist/client.js",
+      "types": "./dist/client.d.ts",
+      "import": "./dist/client.mjs",
       "require": "./dist/client.js"
     },
     "./common": {
-      "types": "./dist/common/index.d.ts",
-      "import": "./dist/common.js",
+      "types": "./dist/common.d.ts",
+      "import": "./dist/common.mjs",
       "require": "./dist/common.js"
     }
   },
   "typesVersions": {
     "*": {
       ".": [
-        "./dist/server/index.d.ts"
+        "./dist/server.d.ts"
       ],
       "server": [
-        "./dist/server/index.d.ts"
+        "./dist/server.d.ts"
       ],
       "client": [
-        "./dist/client/index.d.ts"
+        "./dist/client.d.ts"
       ],
       "common": [
-        "./dist/common/index.d.ts"
+        "./dist/common.d.ts"
       ]
     }
   },
@@ -55,16 +55,22 @@
     "access": "public"
   },
   "private": false,
+  "engines": {
+    "node": ">=20"
+  },
   "scripts": {
-    "build": "webpack --mode production",
+    "build": "tsup",
     "start": "webpack --mode development",
     "server": "webpack --mode development --name server",
     "client": "webpack --mode development --name client --profile",
     "test": "vitest",
+    "test:ci": "vitest run",
     "test:crud": "vitest run --config vitest.e2e.config.ts --mode crud",
     "test:performance": "vitest run --config vitest.e2e.config.ts --mode performance",
     "test:stress": "vitest run --config vitest.e2e.config.ts --mode stress",
-    "test:all": "node scripts/run-all-tests.mjs"
+    "test:all": "node scripts/run-all-tests.mjs",
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint src --ext .ts,.tsx"
   },
   "files": [
     "dist",
@@ -72,7 +78,7 @@
     "README.md",
     "agent.md"
   ],
-  "typings": "dist/index",
+  "typings": "./dist/server.d.ts",
   "dependencies": {
     "@anupheaus/common": "^0.1.29",
     "@anupheaus/react-ui": "^0.0.66",
@@ -122,6 +128,7 @@
     "ts-node": "^10.9.2",
     "tsconfig-paths": "^4.2.0",
     "tsconfig-paths-webpack-plugin": "^4.1.0",
+    "tsup": "^8.0.0",
     "typescript": "^5.3.3",
     "util": "^0.12.5",
     "vitest": "^1.2.2",

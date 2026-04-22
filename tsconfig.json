@@ -3,46 +3,46 @@
     "strict": true,
     "noUnusedLocals": true,
     "noUnusedParameters": true,
-    "experimentalDecorators": true,
-    "removeComments": true,
+    "noUncheckedIndexedAccess": true,
     "noEmit": true,
-    "module": "ES2020",
+    "isolatedModules": true,
+    "module": "ESNext",
+    "moduleResolution": "bundler",
     "resolveJsonModule": true,
     "esModuleInterop": true,
-    "emitDecoratorMetadata": true,
     "allowSyntheticDefaultImports": true,
-    "moduleResolution": "node",
+    "declaration": true,
+    "declarationMap": true,
     "allowJs": true,
     "skipLibCheck": true,
     "noErrorTruncation": true,
     "lib": [
       "DOM",
       "WebWorker",
-      "ES2020",
-      "ES2021",
+      "ES2022",
       "ESNext.AsyncIterable"
     ],
-    "target": "es6",
+    "target": "ES2022",
     "sourceMap": true,
     "jsx": "react-jsx",
     "paths": {
       "@anupheaus/common": [
-        "../common/src",
+        "../common/src"
       ],
       "@anupheaus/react-ui": [
-        "../react-ui/src",
+        "../react-ui/src"
       ],
       "@anupheaus/socket-api/server": [
-        "../socket-api/src/server",
+        "../socket-api/src/server"
       ],
       "@anupheaus/socket-api/client": [
-        "../socket-api/src/client",
+        "../socket-api/src/client"
       ],
       "@anupheaus/socket-api/common": [
-        "../socket-api/src/common",
+        "../socket-api/src/common"
       ],
       "@anupheaus/socket-api/common/auth": [
-        "../socket-api/src/common/auth",
+        "../socket-api/src/common/auth"
       ]
     }
   },

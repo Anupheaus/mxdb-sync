@@ -38,3 +38,10 @@ tests/e2e/setup/certs/
 
 # Git worktrees
 .worktrees
+
+# Test coverage output
+coverage/
+
+# OS noise
+.DS_Store
+Thumbs.db

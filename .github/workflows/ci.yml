@@ -2,100 +2,172 @@ name: CI
 
 on:
   push:
-    branches: [master, main]
+    branches: [master]
   pull_request:
-    branches: [master, main]
+    branches: [master]
+
+env:
+  PNPM_VERSION: '10'
+  NODE_VERSION: '20'
 
 jobs:
-  setup:
+  # ── PREPARE ────────────────────────────────────────────────────────────────
+  Prepare:
     name: Install Dependencies
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: read
     steps:
-      - uses: actions/checkout@v4
-      - name: Checkout sibling repos
-        run: |
-          git clone https://github.com/Anupheaus/common.git ../common
-          git clone https://github.com/Anupheaus/socket-api.git ../socket-api
-          git clone https://github.com/Anupheaus/react-ui.git ../react-ui
-      - uses: pnpm/action-setup@v4
+      - name: Setup pnpm, node, and install
+        uses: Anupheaus/ci-templates/.github/actions/pnpm-setup@v1
         with:
-          version: latest
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 20
-      - run: pnpm install
-      - name: Archive workspace
-        run: tar -czf /tmp/workspace.tar.gz --exclude='.git' .
-      - uses: actions/upload-artifact@v4
-        with:
-          name: workspace
-          path: /tmp/workspace.tar.gz
-          retention-days: 1
+          pnpm-version: ${{ env.PNPM_VERSION }}
+          node-version: ${{ env.NODE_VERSION }}
+          node-auth-token: ${{ secrets.GITHUB_TOKEN }}
+          patch-package-json: 'true'
 
-  test:
+  # ── VALIDATE ───────────────────────────────────────────────────────────────
+  Validate:
+    name: Validate (type-check, lint, audit)
+    needs: Prepare
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: read
+    steps:
+      - name: Setup pnpm, node, and install
+        uses: Anupheaus/ci-templates/.github/actions/pnpm-setup@v1
+        with:
+          pnpm-version: ${{ env.PNPM_VERSION }}
+          node-version: ${{ env.NODE_VERSION }}
+          node-auth-token: ${{ secrets.GITHUB_TOKEN }}
+          patch-package-json: 'true'
+
+      - name: Type check
+        run: pnpm run typecheck
+
+      - name: Lint
+        run: pnpm run lint
+
+      - name: Security audit
+        run: pnpm audit --audit-level=high
+
+  # ── TEST (Unit) ─────────────────────────────────────────────────────────────
+  Test:
     name: Unit Tests
-    needs: setup
+    needs: Prepare
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: read
     steps:
-      - uses: actions/download-artifact@v4
+      - name: Setup pnpm, node, and install
+        uses: Anupheaus/ci-templates/.github/actions/pnpm-setup@v1
         with:
-          name: workspace
-      - run: tar -xzf workspace.tar.gz
-      - uses: pnpm/action-setup@v4
-        with:
-          version: latest
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 20
-      - run: pnpm test --run
+          pnpm-version: ${{ env.PNPM_VERSION }}
+          node-version: ${{ env.NODE_VERSION }}
+          node-auth-token: ${{ secrets.GITHUB_TOKEN }}
+          patch-package-json: 'true'
 
-  test-crud:
+      - name: Run unit tests
+        run: pnpm run test:ci
+
+  # ── TEST (CRUD E2E) ─────────────────────────────────────────────────────────
+  Test-CRUD:
     name: CRUD E2E Tests
-    needs: setup
+    needs: Prepare
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: read
     steps:
-      - uses: actions/download-artifact@v4
+      - name: Setup pnpm, node, and install
+        uses: Anupheaus/ci-templates/.github/actions/pnpm-setup@v1
         with:
-          name: workspace
-      - run: tar -xzf workspace.tar.gz
-      - uses: pnpm/action-setup@v4
-        with:
-          version: latest
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 20
-      - run: pnpm test:crud
+          pnpm-version: ${{ env.PNPM_VERSION }}
+          node-version: ${{ env.NODE_VERSION }}
+          node-auth-token: ${{ secrets.GITHUB_TOKEN }}
+          patch-package-json: 'true'
 
-  test-performance:
+      - name: Run CRUD E2E tests
+        run: pnpm run test:crud
+
+  # ── TEST (Performance E2E) — master only ────────────────────────────────────
+  Test-Performance:
     name: Performance E2E Tests
-    needs: setup
+    needs: Prepare
+    if: github.ref == 'refs/heads/master'
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: read
     steps:
-      - uses: actions/download-artifact@v4
+      - name: Setup pnpm, node, and install
+        uses: Anupheaus/ci-templates/.github/actions/pnpm-setup@v1
         with:
-          name: workspace
-      - run: tar -xzf workspace.tar.gz
-      - uses: pnpm/action-setup@v4
-        with:
-          version: latest
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 20
-      - run: pnpm test:performance
+          pnpm-version: ${{ env.PNPM_VERSION }}
+          node-version: ${{ env.NODE_VERSION }}
+          node-auth-token: ${{ secrets.GITHUB_TOKEN }}
+          patch-package-json: 'true'
 
-  test-stress:
+      - name: Run performance E2E tests
+        run: pnpm run test:performance
+
+  # ── TEST (Stress) — master only ─────────────────────────────────────────────
+  Test-Stress:
     name: Stress Tests
-    needs: setup
+    needs: Prepare
+    if: github.ref == 'refs/heads/master'
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: read
     steps:
-      - uses: actions/download-artifact@v4
+      - name: Setup pnpm, node, and install
+        uses: Anupheaus/ci-templates/.github/actions/pnpm-setup@v1
         with:
-          name: workspace
-      - run: tar -xzf workspace.tar.gz
-      - uses: pnpm/action-setup@v4
+          pnpm-version: ${{ env.PNPM_VERSION }}
+          node-version: ${{ env.NODE_VERSION }}
+          node-auth-token: ${{ secrets.GITHUB_TOKEN }}
+          patch-package-json: 'true'
+
+      - name: Run stress tests
+        run: pnpm run test:stress
+
+  # ── PUBLISH — master only, after all tests ───────────────────────────────────
+  Publish:
+    name: Build and Publish
+    needs: [Validate, Test, Test-CRUD, Test-Performance, Test-Stress]
+    if: github.ref == 'refs/heads/master'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      packages: write
+    steps:
+      - name: Setup pnpm, node, and install
+        uses: Anupheaus/ci-templates/.github/actions/pnpm-setup@v1
         with:
-          version: latest
-      - uses: actions/setup-node@v4
+          pnpm-version: ${{ env.PNPM_VERSION }}
+          node-version: ${{ env.NODE_VERSION }}
+          node-auth-token: ${{ secrets.GITHUB_TOKEN }}
+          patch-package-json: 'true'
+          fetch-depth: '0'
+
+      - name: Build
+        run: pnpm run build
+
+      - name: Bump version
+        uses: phips28/gh-action-bump-version@master
         with:
-          node-version: 20
-      - run: pnpm test:stress
+          commit-message: 'CI: bumps version to {{version}} [skip ci]'
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Pack
+        run: pnpm pack
+
+      - name: Publish to GitHub Packages
+        run: pnpm publish $(ls *.tgz) --no-git-checks
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

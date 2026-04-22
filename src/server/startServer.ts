@@ -5,6 +5,18 @@ import { getDevices, enableDevice, disableDevice } from './auth/deviceManagement
 import { registerDevAuthRoute } from './auth/registerDevAuthRoute';
 import type { ServerConfig, ServerInstance } from './internalModels';
 
+/**
+ * Initialises the MXDB-sync server: connects to MongoDB, starts Socket.IO, registers auth,
+ * wires actions/subscriptions, and optionally seeds collections.
+ *
+ * Async — awaits the MongoDB connection before resolving. Call `instance.close()` to cleanly
+ * terminate the MongoDB connection (required in tests to avoid open-handle warnings).
+ *
+ * @param config - Server configuration including `mongoDbUrl`, `mongoDbName`, `collections`,
+ *   `server` (HTTP/HTTPS/HTTP2), `name`, and `onGetUserDetails`.
+ * @returns A `ServerInstance` with `createInvite`, `getDevices`, `enableDevice`,
+ *   `disableDevice`, and `close`.
+ */
 export async function startServer(config: ServerConfig): Promise<ServerInstance> {
   let { logger, name, collections, mongoDbName, mongoDbUrl, changeStreamDebounceMs, onRegisterRoutes } = config;
   if (!logger) logger = Logger.getCurrent();

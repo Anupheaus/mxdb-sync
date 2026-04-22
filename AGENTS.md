@@ -108,38 +108,6 @@ Located in `tests/sync-test/`, this is a comprehensive data integrity test suite
 - Server restart mid-session
 - Concurrent operations from multiple clients
 
-## Current Issue
-
-The sync test is failing due to **extra records on the server** that don't match the expected state from the records of truth. This suggests either:
-- Duplicate record creation during sync
-- Improper conflict resolution
-- Race conditions in the sync process
-- Issues with audit trail merging
-
-## Key Files to Investigate
-
-### Sync Process
-- `src/client/providers/sync/synchronise-collections.ts` - Main sync logic
-- `src/server/collections.ts` - Server-side collection operations
-- `src/common/models.ts` - Data models and audit structures
-
-### Test Infrastructure
-- `tests/sync-test/clientSync.integration.test.ts` - Main test runner
-- `tests/sync-test/integrityAssertions.ts` - Validation logic
-- `tests/sync-test/recordsOfTruth.ts` - Expected state tracking
-
-### Server Extensions
-- Look for `extendCollection()` calls with `onAfter` hooks
-- Check for cascading updates that might create extra records
-
-## Debugging Approach
-
-1. **Run the sync test** to reproduce the issue
-2. **Examine logs** in `tests/sync-test/logs/` for timing and operation details
-3. **Check integrity report** for specific extra record IDs
-4. **Trace record lifecycle** from creation through sync to final state
-5. **Verify audit trail merging** logic for proper conflict resolution
-
 ## Critical Design Principles
 
 **Data Integrity is Paramount**: This library's primary purpose is maintaining data consistency across distributed clients. Any changes must prioritize:
@@ -154,10 +122,6 @@ The sync test is failing due to **extra records on the server** that don't match
 - Test thoroughly with the sync test suite to verify audit integrity
 - Consider backward compatibility for existing audit data
 
-## Next Steps
-
-The sync test provides a controlled environment to identify and fix data integrity issues. The comprehensive logging and records of truth make it possible to trace exactly where extra records are being created and why they don't match the expected final state.
-
 ## Running "All" Tests
 
 When the user asks to run "all" tests, **do NOT invoke the suites individually**. Run the single orchestrator script:
@@ -169,6 +133,13 @@ pnpm test:all
 (equivalent: `node scripts/run-all-tests.mjs`)
 
 The script runs Unit, CRUD, Performance, and Stress sequentially, records the wall-clock duration and pass/fail counts of each, and prints a machine-readable JSON block to stdout between `=== RESULTS_JSON_BEGIN ===` and `=== RESULTS_JSON_END ===` markers.
+
+## Related
+
+- [src/AGENTS.md](src/AGENTS.md) — source code navigation (common / client / server)
+- [docs/README.md](docs/README.md) — documentation index
+- [tests/AGENTS.md](tests/AGENTS.md) — e2e test infrastructure
+- [test/AGENTS.md](test/AGENTS.md) — manual test app
 
 **How to report the results back to the user:**
 

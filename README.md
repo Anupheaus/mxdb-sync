@@ -20,9 +20,9 @@ Full documentation lives in **`docs/`** in this repo and is **included in the np
 
 Deeper design and sync specifications: **`docs/plans/`** (see the index in **`docs/README.md`**).
 
-**[Sync Engine](src/common/sync-engine/readme.md)** — living reference for the four-component sync protocol (ClientDispatcher, ServerReceiver, ServerDispatcher, ClientReceiver).
+**[Sync Engine](src/common/sync-engine/AGENTS.md)** — living reference for the four-component sync protocol (ClientDispatcher, ServerReceiver, ServerDispatcher, ClientReceiver).
 
-**[agent.md](agent.md)** (repo root) — short orientation for contributors and AI assistants.
+**[AGENTS.md](AGENTS.md)** (repo root) — short orientation for contributors and AI assistants.
 
 ## Package exports
 
@@ -109,14 +109,15 @@ Additional props (`actions`, `subscriptions`, `onStartup`, `onClientConnected`, 
 ```ts
 interface ServerInstance {
   app: Koa;
-  createInviteLink(userId: string, domain: string): Promise<string>;
+  createInvite(userId: string, baseUrl: string): Promise<string>;
   getDevices(userId: string): Promise<MXDBDeviceInfo[]>;
   enableDevice(requestId: string): Promise<void>;
   disableDevice(requestId: string): Promise<void>;
+  close(): Promise<void>;
 }
 ```
 
-Use `createInviteLink` to generate a time-limited URL you can send to a user. They open it in the browser, the client calls `useMXDBInvite()(url)`, WebAuthn registers a new device, and the device receives an auth token. Use `getDevices` / `enableDevice` / `disableDevice` to manage registered devices per user.
+Use `createInvite` to generate a time-limited URL you can send to a user. They open it in the browser, the client calls `useMXDBInvite()(url)`, WebAuthn registers a new device, and the device receives an auth token. Use `getDevices` / `enableDevice` / `disableDevice` to manage registered devices per user.
 
 ## Client setup
 

@@ -53,6 +53,23 @@ jobs:
       - name: Security audit
         run: pnpm audit --audit-level=high
 
+      - name: Secret detection (TruffleHog)
+        uses: trufflesecurity/trufflehog@main
+        with:
+          base: ${{ github.event.repository.default_branch }}
+          head: HEAD
+          extra_args: --only-verified
+
+      - name: Filesystem security scan (Trivy)
+        uses: aquasecurity/trivy-action@master
+        with:
+          scan-type: fs
+          scan-ref: .
+          format: table
+          exit-code: '1'
+          severity: CRITICAL,HIGH
+          ignore-unfixed: true
+
   # ── TEST (Unit) ─────────────────────────────────────────────────────────────
   Test:
     name: Unit Tests
@@ -70,8 +87,15 @@ jobs:
           node-auth-token: ${{ secrets.GITHUB_TOKEN }}
           patch-package-json: 'true'
 
-      - name: Run unit tests
-        run: pnpm run test:ci
+      - name: Run unit tests with coverage
+        run: pnpm run test:ci -- --coverage
+
+      - name: Upload coverage to Codecov
+        uses: codecov/codecov-action@v4
+        with:
+          token: ${{ secrets.CODECOV_TOKEN }}
+          files: ./coverage/lcov.info
+          fail_ci_if_error: false
 
   # ── TEST (CRUD E2E) ─────────────────────────────────────────────────────────
   Test-CRUD:

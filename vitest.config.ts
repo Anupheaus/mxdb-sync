@@ -45,6 +45,11 @@ export default defineConfig({
     ],
     globals: true,
     setupFiles: ['./tests/e2e/setup/e2eVitestSetup.ts', './tests/e2e/setup/vitestGlobals.ts'],
-    //setupFiles: ['./vitest.setup.ts'],
+    coverage: {
+      provider: 'v8',
+      reporter: ['text', 'lcov'],
+      include: ['src/**/*.ts', 'src/**/*.tsx'],
+      exclude: ['src/**/*.tests.ts', 'src/**/*.tests.tsx', 'src/**/*.d.ts'],
+    },
   },
 });

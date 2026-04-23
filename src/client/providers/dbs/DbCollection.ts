@@ -196,7 +196,7 @@ export class DbCollection<RecordType extends Record = Record> {
   @bind
   public applyServerWriteSync(record: RecordType, lastAuditEntryId: string): void {
     this.#records.set(record.id, record);
-    const branchedAudit = auditor.createBranchFrom<RecordType>(record.id, lastAuditEntryId);
+    const branchedAudit = auditor.createBranchFrom<RecordType>(record.id, lastAuditEntryId || ulid());
     this.#auditRecords.set(record.id, branchedAudit);
     this.#pendingIds.delete(record.id); // Branched audit has no pending changes
     this.#logger?.silly(`[db-diag] applyServerWriteSync "${this.#name}" id=${record.id} anchor=${lastAuditEntryId} auditRecordsSizeAfter=${this.#auditRecords.size} recordsSizeAfter=${this.#records.size}`);

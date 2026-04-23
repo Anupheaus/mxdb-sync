@@ -86,9 +86,15 @@ export async function startAuthenticatedServer({
     onClientConnected: async (client: Socket) => {
       client.once('disconnect', (reason: string) => disconnectReasons.set(client, reason));
 
-      const { user } = useAuthentication();
+      const { user, setUser } = useAuthentication();
 
       if (user != null) {
+        // Re-emit socketAPIUserChanged here (post-connection) to guarantee delivery.
+        // The io.use() middleware emits this event while the socket is still in the
+        // handshake phase; some socket.io configurations may not flush buffered events
+        // reliably. Calling setUser() again here is idempotent on the server and
+        // ensures the client always receives its authenticated user state.
+        await setUser(user);
         connectedUsers.set(client, user);
         await onConnected?.({ user });
       }

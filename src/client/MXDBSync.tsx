@@ -1,8 +1,9 @@
-import { createComponent } from '@anupheaus/react-ui';
+import { createComponent, useBound } from '@anupheaus/react-ui';
 import type { ReactNode } from 'react';
 import { useEffect, useMemo, useRef } from 'react';
 import type { Logger } from '@anupheaus/common';
 import { LoggerProvider } from '@anupheaus/react-ui';
+import type { SocketAPIUser } from '@anupheaus/socket-api/client';
 import { SocketAPI } from '@anupheaus/socket-api/client';
 import { ConflictResolutionContext } from './providers';
 import { MXDBSyncInner } from './auth/MXDBSyncInner';
@@ -14,6 +15,7 @@ interface Props {
   host?: string;
   name: string;
   logger?: Logger;
+  autoConnect?: boolean;
   collections: MXDBCollection[];
   onDeviceDisabled?(): void;
   onSignedIn?(user: MXDBUserDetails): void;
@@ -27,6 +29,7 @@ export const MXDBSync = createComponent('MXDBSync', ({
   host,
   name,
   logger,
+  autoConnect,
   collections,
   onDeviceDisabled,
   onSignedIn,
@@ -46,7 +49,10 @@ export const MXDBSync = createComponent('MXDBSync', ({
 
   const conflictResolutionContext = useMemo(() => ({ onConflictResolution }), [onConflictResolution]);
 
-  const onPrfRef = useRef<((userId: string, prfOutput: ArrayBuffer) => void) | undefined>(undefined);
+  const onPrfRef = useRef<((userId: string, prfOutput: ArrayBuffer) => void | Promise<void>) | undefined>(undefined);
+
+  const handlePrf = useBound((userId: string, prfOutput: ArrayBuffer) => onPrfRef.current?.(userId, prfOutput) ?? undefined);
+  const handleSignedIn = useBound((user: SocketAPIUser) => onSignedIn?.(user as MXDBUserDetails));
 
   return (
     <LoggerProvider logger={logger} loggerName="MXDB-Sync">
@@ -54,9 +60,10 @@ export const MXDBSync = createComponent('MXDBSync', ({
         <SocketAPI
           name={name}
           host={host}
-          onPrf={(userId, prfOutput) => onPrfRef.current?.(userId, prfOutput)}
+          autoConnect={autoConnect}
+          onPrf={handlePrf}
           onDeviceDisabled={onDeviceDisabled}
-          onSignedIn={onSignedIn ? (user) => onSignedIn(user as MXDBUserDetails) : undefined}
+          onSignedIn={onSignedIn != null ? handleSignedIn : undefined}
           onSignedOut={onSignedOut}
         >
           <MXDBSyncInner

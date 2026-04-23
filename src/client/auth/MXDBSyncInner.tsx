@@ -12,7 +12,7 @@ import type { MXDBUserDetails } from '../../common/models';
 interface Props {
   appName: string;
   collections: MXDBCollection[];
-  onPrfRef: MutableRefObject<((userId: string, prfOutput: ArrayBuffer) => void) | undefined>;
+  onPrfRef: MutableRefObject<((userId: string, prfOutput: ArrayBuffer) => void | Promise<void>) | undefined>;
   onError?(error: MXDBError): void;
   onSignedIn?(user: MXDBUserDetails): void;
   onSignedOut?(): void;
@@ -106,18 +106,6 @@ export const MXDBSyncInner = createComponent('MXDBSyncInner', ({
       onSignedIn?.(user);
     }
 
-    if (user != null && encryptionKey == null && !reauthInProgressRef.current) {
-      reauthInProgressRef.current = true;
-      signIn().catch((err: unknown) => {
-        reauthInProgressRef.current = false;
-        onError?.({
-          code: 'AUTH_REJECTED',
-          message: err instanceof Error ? err.message : 'WebAuthn reauth failed',
-          severity: 'fatal',
-          originalError: err,
-        });
-      });
-    }
   }, [user]); // eslint-disable-line react-hooks/exhaustive-deps
 
   if (encryptionKey == null || dbName == null) {

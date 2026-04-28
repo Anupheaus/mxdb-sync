@@ -54,8 +54,10 @@ export function createUseRecord<
   async function useRecord(id: string | undefined, ...args: Args): Promise<ServerUseRecord<Name, T, HelperResults>> {
     const { get, upsert, remove } = useCollection(collection);
     const loadedRecord = id != null ? await get(id) : undefined;
-    const record = hydrateRecord(loadedRecord, ...args);
-    if (id != null && record != null) (record as CommonRecord).id = id;
+    const hydratedRecord = hydrateRecord(loadedRecord, ...args);
+    const record = id != null && hydratedRecord != null
+      ? { ...(hydratedRecord as CommonRecord), id } as T
+      : hydratedRecord;
     const isNew = loadedRecord == null;
 
     const removeFn = async (): Promise<boolean> => {
@@ -66,7 +68,7 @@ export function createUseRecord<
 
     const baseResult = {
       [camelName]: record,
-      [`upsert${pascalName}`]: upsert,
+      [`upsert${pascalName}`]: (record: T) => upsert(record),
       [`remove${pascalName}`]: removeFn,
       [`isNew${pascalName}`]: isNew,
     } as ServerUseRecord<Name, T>;

@@ -95,6 +95,14 @@ describe('createUseRecord (server)', () => {
     expect((result as any).isSpecial).toBe(true);
   });
 
+  it('passes extra args through to hydrateRecord', async () => {
+    const hydrateRecord = vi.fn().mockReturnValue({ id: '', name: '' });
+    mockGet.mockResolvedValue({ id: '1', name: 'Existing' });
+    const useOrder = createUseRecord('order', collection, { hydrateRecord });
+    await useOrder('1', 'extra-arg' as any);
+    expect(hydrateRecord).toHaveBeenCalledWith(expect.objectContaining({ id: '1' }), 'extra-arg');
+  });
+
   it('attaches extensions as static methods', () => {
     const staticFn = vi.fn().mockReturnValue('hello');
     const useOrder = createUseRecord('order', collection, {

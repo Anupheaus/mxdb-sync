@@ -43,6 +43,9 @@ type UseRecordsHook<
   query(props: QueryProps<T>): Promise<ServerUseRecordsQuery<Name, T>>;
 }) & Extensions;
 
+const isQueryProps = (arg: unknown): arg is QueryProps<Record> =>
+  is.plainObject(arg) && ('filters' in arg || 'disable' in arg || 'sorts' in arg || 'pagination' in arg);
+
 export function createUseRecords<
   Name extends string,
   Collection extends MXDBCollection,
@@ -94,8 +97,10 @@ export function createUseRecords<
         ...additionalQueryProps,
         filters: { id: { $in: recordIds } } as DataFilters<T>,
       } as QueryProps<T>;
+    } else if (isQueryProps(idsOrProps)) {
+      resolvedProps = { ...additionalQueryProps, ...idsOrProps };
     } else {
-      resolvedProps = { ...additionalQueryProps, ...idsOrProps } as QueryProps<T>;
+      resolvedProps = additionalQueryProps ?? {};
     }
 
     const { records, total } = await col.query(resolvedProps);

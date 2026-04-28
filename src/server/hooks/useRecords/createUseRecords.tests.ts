@@ -94,6 +94,15 @@ describe('createUseRecords (server)', () => {
     expect((result as any).isAdmin).toBe(true);
   });
 
+  it('passes base result context to helpers', () => {
+    const helpersFn = vi.fn().mockReturnValue({});
+    const useOrders = createUseRecords('orders', collection, { helpers: helpersFn });
+    useOrders();
+    expect(helpersFn).toHaveBeenCalledWith(
+      expect.objectContaining({ queryOrders: expect.any(Function), upsertOrders: expect.any(Function) }),
+    );
+  });
+
   it('attaches extensions as static methods', () => {
     const staticFn = vi.fn().mockReturnValue('hello');
     const useOrders = createUseRecords('orders', collection, {

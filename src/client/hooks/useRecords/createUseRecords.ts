@@ -3,7 +3,7 @@ import { is } from '@anupheaus/common';
 import type { MXDBCollection, QueryProps } from '../../../common';
 import type { ExtensionsType, RecordTypeOfCollection, RemoveDasherized } from '../../../common/models';
 import { useCollection } from '../useCollection/useCollection';
-import { useMemo, useRef } from 'react';
+import { useStableHelpers } from '../useStableHelpers';
 
 type UseCollectionResult<T extends Record> = ReturnType<typeof useCollection<T>>;
 
@@ -21,26 +21,6 @@ export type UseRecordsQuery<Name extends string, T extends Record> =
 
 const isQueryProps = (arg: unknown): arg is QueryProps<Record> =>
   is.plainObject(arg) && ('filters' in arg || 'disable' in arg || 'sorts' in arg || 'pagination' in arg);
-
-function useStableHelpers<HelperResults extends AnyObject>(rawHelpers: HelperResults | undefined): HelperResults | undefined {
-  const latestRef = useRef(rawHelpers);
-  latestRef.current = rawHelpers;
-
-  const keysSignature = rawHelpers == null ? '' : Object.keys(rawHelpers).sort().join(',');
-  const stableFunctionWrappers = useMemo(() => {
-    if (rawHelpers == null) return {};
-    const wrappers: AnyObject = {};
-    for (const key of Object.keys(rawHelpers)) {
-      if (typeof (rawHelpers as AnyObject)[key] === 'function') {
-        wrappers[key] = (...args: unknown[]) => (latestRef.current as AnyObject)[key](...args);
-      }
-    }
-    return wrappers;
-  }, [keysSignature]);
-
-  if (rawHelpers == null) return undefined;
-  return { ...rawHelpers, ...stableFunctionWrappers } as HelperResults;
-}
 
 interface UseRecordsOptions<T extends Record, HelperResults extends AnyObject, Extensions extends ExtensionsType> {
   additionalQueryProps?: QueryProps<T>;
@@ -101,7 +81,7 @@ export function createUseRecords<
     const resolvedQueryProps: QueryProps<T> =
       args.length === 0 ? (additionalQueryProps ?? {}) :
         recordIds != null ? { filters: { id: { $in: recordIds } }, disable: recordIds.length === 0, ...additionalQueryProps } :
-          isQueryProps(args[0]) ? args[0] as QueryProps<T> :
+          isQueryProps(args[0]) ? { ...additionalQueryProps, ...args[0] as QueryProps<T> } :
             additionalQueryProps ?? {};
 
     const { records, isLoading, total } = useQuery(resolvedQueryProps);

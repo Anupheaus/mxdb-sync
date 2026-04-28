@@ -192,6 +192,19 @@ describe('createUseRecords (client)', () => {
     );
   });
 
+  it('merges additionalQueryProps as defaults when QueryProps are passed explicitly', () => {
+    const useOrders = createUseRecords('orders', collection, {
+      additionalQueryProps: { sorts: [{ field: 'name' as any, direction: 'asc' }] },
+    });
+    renderHook(() => useOrders.query({ filters: { status: 'active' } as any }));
+    expect(mockUseQuery).toHaveBeenCalledWith(
+      expect.objectContaining({
+        filters: { status: 'active' },
+        sorts: [{ field: 'name', direction: 'asc' }],
+      }),
+    );
+  });
+
   // ─── Helpers ─────────────────────────────────────────────────────────────
 
   it('merges helpers into the main hook result', () => {

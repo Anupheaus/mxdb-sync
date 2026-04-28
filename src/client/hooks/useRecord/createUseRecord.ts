@@ -4,7 +4,8 @@ import type { MXDBCollection } from '../../../common';
 import type { ExtensionsType, RecordTypeOfCollection, RemoveDasherized } from '../../../common/models';
 import { useRecord as useMXDBRecord } from '../../useRecord';
 import { useBound, useDebounce, useOnUnmount, useUpdatableState } from '@anupheaus/react-ui';
-import { useLayoutEffect, useMemo, useRef, type Dispatch, type SetStateAction } from 'react';
+import { useLayoutEffect, useRef, type Dispatch, type SetStateAction } from 'react';
+import { useStableHelpers } from '../useStableHelpers';
 
 type AutoSave<T extends CommonRecord> = (record: T) => void;
 
@@ -53,26 +54,6 @@ type UseRecordHook<
   & ((recordOrId: T | string | undefined) => UseRecord<Name, T, HelperResults>)
   & ((recordOrId: T | string | undefined, createNew: true, ...args: Args) => NonNullableUseRecord<Name, T, HelperResults>)
   & Extensions;
-
-function useStableHelpers<HelperResults extends AnyObject>(rawHelpers: HelperResults | undefined): HelperResults | undefined {
-  const latestRef = useRef(rawHelpers);
-  latestRef.current = rawHelpers;
-
-  const keysSignature = rawHelpers == null ? '' : Object.keys(rawHelpers).sort().join(',');
-  const stableFunctionWrappers = useMemo(() => {
-    if (rawHelpers == null) return {};
-    const wrappers: AnyObject = {};
-    for (const key of Object.keys(rawHelpers)) {
-      if (typeof (rawHelpers as AnyObject)[key] === 'function') {
-        wrappers[key] = (...args: unknown[]) => (latestRef.current as AnyObject)[key](...args);
-      }
-    }
-    return wrappers;
-  }, [keysSignature]);
-
-  if (rawHelpers == null) return undefined;
-  return { ...rawHelpers, ...stableFunctionWrappers } as HelperResults;
-}
 
 export function createUseRecord<
   Name extends string,

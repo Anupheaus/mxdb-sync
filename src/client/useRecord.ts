@@ -1,11 +1,10 @@
 import { is, type Record } from '@anupheaus/common';
 import { useContext, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import type { MXDBCollection } from '../common';
+import type { RecordTypeOfCollection } from '../common/models';
 import { useCollection } from './hooks/useCollection/useCollection';
 import { auditor } from '../common/auditor';
 import { ConflictResolutionContext } from './providers';
-
-export type RecordTypeOfCollection<Collection extends MXDBCollection<Record>> = Collection extends MXDBCollection<infer RecordType> ? RecordType : never;
 
 export function useRecord<Collection extends MXDBCollection<Record>>(recordOrId: RecordTypeOfCollection<Collection> | string | undefined, collection: Collection) {
   const { onConflictResolution } = useContext(ConflictResolutionContext);

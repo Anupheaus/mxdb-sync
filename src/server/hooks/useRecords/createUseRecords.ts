@@ -91,8 +91,8 @@ export function createUseRecords<
     } else if (Array.isArray(idsOrProps)) {
       const recordIds = idsOrProps.map(item => (is.string(item) ? item : (item as T).id));
       resolvedProps = {
-        filters: { id: { $in: recordIds } } as DataFilters<T>,
         ...additionalQueryProps,
+        filters: { id: { $in: recordIds } } as DataFilters<T>,
       } as QueryProps<T>;
     } else {
       resolvedProps = { ...additionalQueryProps, ...idsOrProps } as QueryProps<T>;

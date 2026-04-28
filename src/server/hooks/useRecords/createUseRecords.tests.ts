@@ -103,4 +103,34 @@ describe('createUseRecords (server)', () => {
     (useOrders as any).getDefault();
     expect(staticFn).toHaveBeenCalled();
   });
+
+  it('merges additionalQueryProps into no-args query', async () => {
+    const useOrders = createUseRecords('orders', collection, {
+      additionalQueryProps: { sorts: [{ field: 'name' as any, direction: 'asc' }] },
+    });
+    await useOrders.query();
+    expect(mockQuery).toHaveBeenCalledWith(
+      expect.objectContaining({ sorts: [{ field: 'name', direction: 'asc' }] }),
+    );
+  });
+
+  it('caller QueryProps win over additionalQueryProps', async () => {
+    const useOrders = createUseRecords('orders', collection, {
+      additionalQueryProps: { sorts: [{ field: 'name' as any, direction: 'asc' }] },
+    });
+    await useOrders.query({ sorts: [{ field: 'createdAt' as any, direction: 'desc' }] });
+    expect(mockQuery).toHaveBeenCalledWith({
+      sorts: [{ field: 'createdAt', direction: 'desc' }],
+    });
+  });
+
+  it('computed $in filter is not clobbered by additionalQueryProps.filters', async () => {
+    const useOrders = createUseRecords('orders', collection, {
+      additionalQueryProps: { filters: { status: 'active' } as any },
+    });
+    await useOrders.query(['1', '2']);
+    expect(mockQuery).toHaveBeenCalledWith(
+      expect.objectContaining({ filters: { id: { $in: ['1', '2'] } } }),
+    );
+  });
 });

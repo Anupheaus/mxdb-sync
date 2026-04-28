@@ -68,6 +68,7 @@ export function createUseRecord<
 ) {
   type T = RecordTypeOfCollection<Collection>;
   const pascalName = name.toVariableName('pascal');
+  const camelName = name.toVariableName();
 
   function useRecord(recordOrId: T | string | undefined): UseRecord<Name, T, HelperResults>;
   function useRecord(recordOrId: T | string | undefined, createNew: true, ...args: Args): NonNullableUseRecord<Name, T, HelperResults>;
@@ -122,7 +123,7 @@ export function createUseRecord<
     });
 
     const baseResult = {
-      [name]: record,
+      [camelName]: record,
       [`isLoading${pascalName}`]: isLoadingRecord,
       [`set${pascalName}`]: setRecord,
       [`upsert${pascalName}`]: upsertRecord,

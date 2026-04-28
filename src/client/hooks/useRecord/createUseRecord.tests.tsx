@@ -5,9 +5,6 @@ import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { createUseRecord } from './createUseRecord';
 
-const mockUpsert = vi.fn();
-const mockRemove = vi.fn();
-
 vi.mock('../../useRecord', () => ({
   useRecord: vi.fn(() => ({
     record: undefined,

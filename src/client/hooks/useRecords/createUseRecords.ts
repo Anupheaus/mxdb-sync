@@ -80,7 +80,7 @@ export function createUseRecords<
     const recordIds = recordsOrIds?.map(item => (typeof item === 'string' ? item : (item as Record).id));
     const resolvedQueryProps: QueryProps<T> =
       args.length === 0 ? (additionalQueryProps ?? {}) :
-        recordIds != null ? { filters: { id: { $in: recordIds } }, disable: recordIds.length === 0, ...additionalQueryProps } :
+        recordIds != null ? { ...additionalQueryProps, filters: { id: { $in: recordIds } } as QueryProps<T>['filters'], disable: recordIds.length === 0 } :
           isQueryProps(args[0]) ? { ...additionalQueryProps, ...args[0] as QueryProps<T> } :
             additionalQueryProps ?? {};
 

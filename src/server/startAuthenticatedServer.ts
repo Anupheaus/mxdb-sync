@@ -53,7 +53,7 @@ export async function startAuthenticatedServer({
     auth: configureAuthentication({
       mode: 'webauthn',
       store: authColl,
-      onGetUserDetails: async (userId) => {
+      onGetInviteDetails: async (userId) => {
         const details = onGetUserDetails != null
           ? await onGetUserDetails(userId)
           : { id: userId, name: userId } as MXDBUserDetails;

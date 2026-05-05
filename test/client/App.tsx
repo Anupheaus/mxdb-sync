@@ -1,5 +1,5 @@
 import { createComponent, Dialogs, Flex } from '@anupheaus/react-ui';
-import { MXDBSync, useAuth } from '../../src/client';
+import { MXDBSync, useAuthentication } from '../../src/client';
 import { collections } from '../common';
 import { Addresses } from './Addresses';
 import { ConnectionTest } from './ConnectionTest';
@@ -9,7 +9,7 @@ import { SyncStatus } from './SyncStatus';
 import { Registration } from './Registration';
 
 const AppContent = createComponent('AppContent', () => {
-  const { isAuthenticated } = useAuth();
+  const { isAuthenticated } = useAuthentication();
 
   if (!isAuthenticated) return <Registration />;
 

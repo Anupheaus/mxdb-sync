@@ -10,6 +10,9 @@ const mockRemove = vi.fn();
 const mockQuery = vi.fn();
 const mockGet = vi.fn();
 const mockUseQuery = vi.fn();
+const mockUseGet = vi.fn();
+const mockUseGetAll = vi.fn();
+const mockUseDistinct = vi.fn();
 
 vi.mock('../useCollection/useCollection', () => ({
   useCollection: () => ({
@@ -18,6 +21,9 @@ vi.mock('../useCollection/useCollection', () => ({
     query: mockQuery,
     get: mockGet,
     useQuery: mockUseQuery,
+    useGet: mockUseGet,
+    useGetAll: mockUseGetAll,
+    useDistinct: mockUseDistinct,
   }),
 }));
 
@@ -61,6 +67,9 @@ describe('createUseRecords (client)', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockUseQuery.mockReturnValue({ records: [], isLoading: false, total: 0 });
+    mockUseGet.mockReturnValue({ record: undefined, isLoading: false, error: undefined });
+    mockUseGetAll.mockReturnValue({ records: [], isLoading: false, error: undefined });
+    mockUseDistinct.mockReturnValue({ values: [], isLoading: false, error: undefined });
   });
 
   let unmount: (() => void) | undefined;
@@ -89,6 +98,16 @@ describe('createUseRecords (client)', () => {
     expect(mockUpsert).toHaveBeenCalledWith({ id: 'r1' });
     result.current.removeOrders([{ id: 'r1' }] as any);
     expect(mockRemove).toHaveBeenCalledWith([{ id: 'r1' }]);
+  });
+
+  it('queryOrders returns named records and total', async () => {
+    mockQuery.mockResolvedValue({ records: [{ id: '1' }], total: 3 });
+    const useOrders = createUseRecords('orders', collection);
+    const { result, unmount: u } = renderHook(() => useOrders());
+    unmount = u;
+    const queryResult = await result.current.queryOrders();
+    expect(queryResult.orders).toEqual([{ id: '1' }]);
+    expect(queryResult.totalOrders).toBe(3);
   });
 
   // ─── Query sub-hook: named return fields ─────────────────────────────────
@@ -149,6 +168,106 @@ describe('createUseRecords (client)', () => {
     expect(mockUseQuery).toHaveBeenCalledWith({ disable: true });
   });
 
+  // ─── Static get hook ─────────────────────────────────────────────────────
+
+  it('get static hook returns named record, isLoading, and error', () => {
+    mockUseGet.mockReturnValue({ record: { id: '1', name: 'A' }, isLoading: false, error: undefined });
+    const useOrders = createUseRecords('orders', collection);
+    const { result, unmount: u } = renderHook(() => useOrders.get('1'));
+    unmount = u;
+    expect(result.current.orders).toEqual({ id: '1', name: 'A' });
+    expect(result.current.isLoadingOrders).toBe(false);
+    expect(result.current.error).toBeUndefined();
+  });
+
+  it('get static hook delegates to useCollection.useGet with the given id', () => {
+    const useOrders = createUseRecords('orders', collection);
+    renderHook(() => useOrders.get('abc'));
+    expect(mockUseGet).toHaveBeenCalledWith('abc');
+  });
+
+  it('get static hook returns undefined record when not found', () => {
+    mockUseGet.mockReturnValue({ record: undefined, isLoading: false, error: undefined });
+    const useOrders = createUseRecords('orders', collection);
+    const { result, unmount: u } = renderHook(() => useOrders.get('missing'));
+    unmount = u;
+    expect(result.current.orders).toBeUndefined();
+  });
+
+  it('get static hook surfaces isLoading while fetching', () => {
+    mockUseGet.mockReturnValue({ record: undefined, isLoading: true, error: undefined });
+    const useOrders = createUseRecords('orders', collection);
+    const { result, unmount: u } = renderHook(() => useOrders.get('1'));
+    unmount = u;
+    expect(result.current.isLoadingOrders).toBe(true);
+  });
+
+  // ─── Static getAll hook ───────────────────────────────────────────────────
+
+  it('getAll static hook returns named records, isLoading, and error', () => {
+    mockUseGetAll.mockReturnValue({ records: [{ id: '1' }, { id: '2' }], isLoading: false, error: undefined });
+    const useOrders = createUseRecords('orders', collection);
+    const { result, unmount: u } = renderHook(() => useOrders.getAll());
+    unmount = u;
+    expect(result.current.orders).toEqual([{ id: '1' }, { id: '2' }]);
+    expect(result.current.isLoadingOrders).toBe(false);
+  });
+
+  it('getAll static hook calls useCollection.useGetAll', () => {
+    const useOrders = createUseRecords('orders', collection);
+    renderHook(() => useOrders.getAll());
+    expect(mockUseGetAll).toHaveBeenCalled();
+  });
+
+  // ─── Static find hook ─────────────────────────────────────────────────────
+
+  it('find static hook returns first matching record', () => {
+    mockUseQuery.mockReturnValue({ records: [{ id: '1', status: 'active' }], isLoading: false, total: 1 });
+    const useOrders = createUseRecords('orders', collection);
+    const { result, unmount: u } = renderHook(() => useOrders.find({ status: 'active' } as any));
+    unmount = u;
+    expect(result.current.orders).toEqual({ id: '1', status: 'active' });
+  });
+
+  it('find static hook passes filters to useQuery', () => {
+    const useOrders = createUseRecords('orders', collection);
+    renderHook(() => useOrders.find({ status: 'active' } as any));
+    expect(mockUseQuery).toHaveBeenCalledWith({ filters: { status: 'active' } });
+  });
+
+  it('find static hook returns undefined when no records match', () => {
+    mockUseQuery.mockReturnValue({ records: [], isLoading: false, total: 0 });
+    const useOrders = createUseRecords('orders', collection);
+    const { result, unmount: u } = renderHook(() => useOrders.find({ status: 'gone' } as any));
+    unmount = u;
+    expect(result.current.orders).toBeUndefined();
+  });
+
+  it('find static hook surfaces isLoading', () => {
+    mockUseQuery.mockReturnValue({ records: [], isLoading: true, total: 0 });
+    const useOrders = createUseRecords('orders', collection);
+    const { result, unmount: u } = renderHook(() => useOrders.find({ status: 'active' } as any));
+    unmount = u;
+    expect(result.current.isLoadingOrders).toBe(true);
+  });
+
+  // ─── Static distinct hook ─────────────────────────────────────────────────
+
+  it('distinct static hook returns values, isLoading, and error', () => {
+    mockUseDistinct.mockReturnValue({ values: ['pending', 'active'], isLoading: false, error: undefined });
+    const useOrders = createUseRecords('orders', collection);
+    const { result, unmount: u } = renderHook(() => useOrders.distinct('status' as any));
+    unmount = u;
+    expect(result.current.values).toEqual(['pending', 'active']);
+    expect(result.current.isLoadingOrders).toBe(false);
+  });
+
+  it('distinct static hook delegates to useCollection.useDistinct with the given field', () => {
+    const useOrders = createUseRecords('orders', collection);
+    renderHook(() => useOrders.distinct('status' as any));
+    expect(mockUseDistinct).toHaveBeenCalledWith('status');
+  });
+
   // ─── Dasherized collection names ─────────────────────────────────────────
 
   it('handles dasherized names — camelCase field, PascalCase suffix', () => {
@@ -170,37 +289,46 @@ describe('createUseRecords (client)', () => {
     expect(typeof result.current.getOrderItems).toBe('function');
   });
 
+  it('get static hook uses camelCase name for dasherized collections', () => {
+    mockUseGet.mockReturnValue({ record: { id: '1' }, isLoading: false, error: undefined });
+    const useOrderItems = createUseRecords('order-items', collection);
+    const { result, unmount: u } = renderHook(() => useOrderItems.get('1'));
+    unmount = u;
+    expect(result.current).toHaveProperty('orderItems');
+    expect(result.current).toHaveProperty('isLoadingOrderItems');
+  });
+
   // ─── additionalQueryProps ─────────────────────────────────────────────────
 
   it('merges additionalQueryProps into id-based query', () => {
     const useOrders = createUseRecords('orders', collection, {
-      additionalQueryProps: { sorts: [{ field: 'name' as any, direction: 'asc' }] },
+      additionalQueryProps: { sorts: [['name', 'asc'] as any] },
     });
     renderHook(() => useOrders.query(['1']));
     expect(mockUseQuery).toHaveBeenCalledWith(
-      expect.objectContaining({ sorts: [{ field: 'name', direction: 'asc' }] }),
+      expect.objectContaining({ sorts: [['name', 'asc']] }),
     );
   });
 
   it('merges additionalQueryProps into no-args query', () => {
     const useOrders = createUseRecords('orders', collection, {
-      additionalQueryProps: { sorts: [{ field: 'name' as any, direction: 'desc' }] },
+      additionalQueryProps: { sorts: [['name', 'desc'] as any] },
     });
     renderHook(() => useOrders.query());
     expect(mockUseQuery).toHaveBeenCalledWith(
-      expect.objectContaining({ sorts: [{ field: 'name', direction: 'desc' }] }),
+      expect.objectContaining({ sorts: [['name', 'desc']] }),
     );
   });
 
   it('merges additionalQueryProps as defaults when QueryProps are passed explicitly', () => {
     const useOrders = createUseRecords('orders', collection, {
-      additionalQueryProps: { sorts: [{ field: 'name' as any, direction: 'asc' }] },
+      additionalQueryProps: { sorts: [['name', 'asc'] as any] },
     });
     renderHook(() => useOrders.query({ filters: { status: 'active' } as any }));
     expect(mockUseQuery).toHaveBeenCalledWith(
       expect.objectContaining({
         filters: { status: 'active' },
-        sorts: [{ field: 'name', direction: 'asc' }],
+        sorts: [['name', 'asc']],
       }),
     );
   });

@@ -1,7 +1,8 @@
-import type { AnyObject, Record as CommonRecord } from '@anupheaus/common';
+import type { AnyObject, DataFilters, Record as CommonRecord } from '@anupheaus/common';
 import { is } from '@anupheaus/common';
-import type { MXDBCollection } from '../../../common';
-import type { ExtensionsType, RecordTypeOfCollection, RemoveDasherized } from '../../../common/models';
+import type { MXDBCollection, MXDBError, QueryProps } from '../../../common';
+import type { AddDebugTo, AddDisableTo, ExtensionsType, RecordTypeOfCollection, RemoveDasherized } from '../../../common/models';
+import { useCollection } from '../useCollection/useCollection';
 import { useRecord as useMXDBRecord } from '../../useRecord';
 import { useBound, useDebounce, useOnUnmount, useUpdatableState } from '@anupheaus/react-ui';
 import { useLayoutEffect, useRef, type Dispatch, type SetStateAction } from 'react';
@@ -24,6 +25,29 @@ export type UseRecord<Name extends string, T extends CommonRecord, Helpers exten
 export type NonNullableUseRecord<Name extends string, T extends CommonRecord, Helpers extends AnyObject = {}> = {
   [key in Name as RemoveDasherized<Name>]: T;
 } & CommonUseRecord<Name, T> & Helpers;
+
+type UseStaticGet<Name extends string, T extends CommonRecord> =
+  & { [key in Name as RemoveDasherized<Name>]: T | undefined; }
+  & { [key in Name as `isLoading${Capitalize<RemoveDasherized<Name>>}`]: boolean; }
+  & { error?: MXDBError; };
+
+type UseStaticGetAll<Name extends string, T extends CommonRecord> =
+  & { [key in Name as RemoveDasherized<Name>]: T[]; }
+  & { [key in Name as `isLoading${Capitalize<RemoveDasherized<Name>>}`]: boolean; }
+  & { error?: MXDBError; };
+
+type UseStaticFind<Name extends string, T extends CommonRecord> =
+  & { [key in Name as RemoveDasherized<Name>]: T | undefined; }
+  & { [key in Name as `isLoading${Capitalize<RemoveDasherized<Name>>}`]: boolean; };
+
+type UseStaticQuery<Name extends string, T extends CommonRecord> =
+  & { [key in Name as RemoveDasherized<Name>]: T[]; }
+  & { [key in Name as `isLoading${Capitalize<RemoveDasherized<Name>>}`]: boolean; }
+  & { [key in Name as `total${Capitalize<RemoveDasherized<Name>>}`]: number; };
+
+type UseStaticDistinct<Name extends string, T extends CommonRecord, K extends keyof T = keyof T> =
+  & { values: T[K][]; error?: MXDBError; }
+  & { [key in Name as `isLoading${Capitalize<RemoveDasherized<Name>>}`]: boolean; };
 
 interface HelpersContext<T extends CommonRecord> {
   recordOrId: T | string | undefined;
@@ -53,6 +77,11 @@ type UseRecordHook<
 > =
   & ((recordOrId: T | string | undefined) => UseRecord<Name, T, HelperResults>)
   & ((recordOrId: T | string | undefined, createNew: true, ...args: Args) => NonNullableUseRecord<Name, T, HelperResults>)
+  & { get: (id: string | undefined) => UseStaticGet<Name, T> }
+  & { getAll: (props?: AddDebugTo<AddDisableTo<object>>) => UseStaticGetAll<Name, T> }
+  & { find: (filters: DataFilters<T>) => UseStaticFind<Name, T> }
+  & { query: (queryProps?: QueryProps<T>) => UseStaticQuery<Name, T> }
+  & { distinct: <K extends keyof T>(field: K) => UseStaticDistinct<Name, T, K> }
   & Extensions;
 
 export function createUseRecord<
@@ -137,6 +166,61 @@ export function createUseRecord<
 
     return { ...baseResult, ...boundHelpers } as UseRecord<Name, T, HelperResults>;
   }
+
+  function useRecordGet(id: string | undefined): UseStaticGet<Name, T> {
+    const { useGet } = useCollection(collection);
+    const { record, isLoading, error } = useGet(id);
+    return {
+      [camelName]: record,
+      [`isLoading${pascalName}`]: isLoading,
+      error,
+    } as UseStaticGet<Name, T>;
+  }
+
+  function useRecordGetAll(props?: AddDebugTo<AddDisableTo<object>>): UseStaticGetAll<Name, T> {
+    const { useGetAll } = useCollection(collection);
+    const { records, isLoading, error } = useGetAll(props);
+    return {
+      [camelName]: records,
+      [`isLoading${pascalName}`]: isLoading,
+      error,
+    } as UseStaticGetAll<Name, T>;
+  }
+
+  function useRecordFind(filters: DataFilters<T>): UseStaticFind<Name, T> {
+    const { useQuery } = useCollection(collection);
+    const { records, isLoading } = useQuery({ filters });
+    return {
+      [camelName]: records[0] as T | undefined,
+      [`isLoading${pascalName}`]: isLoading,
+    } as UseStaticFind<Name, T>;
+  }
+
+  function useRecordQuery(queryProps?: QueryProps<T>): UseStaticQuery<Name, T> {
+    const { useQuery } = useCollection(collection);
+    const { records, isLoading, total } = useQuery(queryProps ?? {});
+    return {
+      [camelName]: records,
+      [`isLoading${pascalName}`]: isLoading,
+      [`total${pascalName}`]: total,
+    } as UseStaticQuery<Name, T>;
+  }
+
+  function useRecordDistinct<K extends keyof T>(field: K): UseStaticDistinct<Name, T, K> {
+    const { useDistinct } = useCollection(collection);
+    const { values, isLoading, error } = useDistinct(field);
+    return {
+      values: values as T[K][],
+      [`isLoading${pascalName}`]: isLoading,
+      error,
+    } as UseStaticDistinct<Name, T, K>;
+  }
+
+  (useRecord as any).get = useRecordGet;
+  (useRecord as any).getAll = useRecordGetAll;
+  (useRecord as any).find = useRecordFind;
+  (useRecord as any).query = useRecordQuery;
+  (useRecord as any).distinct = useRecordDistinct;
 
   if (is.plainObject(extensions)) {
     Object.entries(extensions).forEach(([key, fn]) => {

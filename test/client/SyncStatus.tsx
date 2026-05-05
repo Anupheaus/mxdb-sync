@@ -1,8 +1,8 @@
 import { createComponent, Flex } from '@anupheaus/react-ui';
-import { useMXDBSync } from '../../src/client';
+import { useMXDB } from '../../src/client';
 
 export const SyncStatus = createComponent('SyncStatus', () => {
-  const { isSynchronising } = useMXDBSync();
+  const { isSynchronising } = useMXDB();
 
   return (
     <Flex disableGrow>

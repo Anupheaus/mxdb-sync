@@ -1,4 +1,4 @@
-import { createServerActionHandler, useSocketAPI, type SocketAPIServerAction } from '@anupheaus/socket-api/server';
+import { createServerActionHandler, useAuthentication, type SocketAPIServerAction } from '@anupheaus/socket-api/server';
 import { signInAction, testAction } from '../common';
 
 export const actions: SocketAPIServerAction[] = [
@@ -6,8 +6,8 @@ export const actions: SocketAPIServerAction[] = [
     return { bar: foo };
   }),
   createServerActionHandler(signInAction, async () => {
-    const { setUser } = useSocketAPI();
-    setUser({ id: Math.uniqueId() });
+    const { setUser } = useAuthentication();
+    void setUser({ id: Math.uniqueId() });
     return true;
   }),
 ];

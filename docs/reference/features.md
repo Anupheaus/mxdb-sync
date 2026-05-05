@@ -44,7 +44,7 @@ Legacy **`mxdbSyncCollectionsAction`**, **`mxdbUpsertAction`**, **`mxdbRemoveAct
 | Feature | What it does | Main entry |
 |---------|----------------|------------|
 | **Root provider** | Logger, conflict resolution context, IndexedDB auth bridge | `MXDBSync` — [`src/client/MXDBSync.tsx`](../../src/client/MXDBSync.tsx) |
-| **Connection + sync UI state** | `isConnected`, `clientId`, optional test disconnect/reconnect, sync spinner hook-up | `useMXDBSync` — [`src/client/useMXDBSync.ts`](../../src/client/useMXDBSync.ts) |
+| **Connection + sync UI state** | `isConnected`, `clientId`, optional test disconnect/reconnect, sync spinner hook-up | `useMXDB` — [`src/client/useMXDB.ts`](../../src/client/useMXDB.ts) |
 | **Single-record hook** | Load / edit one record with rebase-on-push behaviour | `useRecord` — [`src/client/useRecord.ts`](../../src/client/useRecord.ts) |
 | **Collection hook** | `get`, `useGet`, `getAll`, `useGetAll`, `upsert`, `remove`, `query`, `useQuery`, `distinct`, `useDistinct`, `onChange`, … | `useCollection` — [`src/client/hooks/useCollection/useCollection.ts`](../../src/client/hooks/useCollection/useCollection.ts) |
 | **Auth** | Whether IndexedDB session is ready | `useMXDBAuth` — [`src/client/hooks/useMXDBAuth.ts`](../../src/client/hooks/useMXDBAuth.ts) |

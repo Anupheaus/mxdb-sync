@@ -26,7 +26,7 @@ describe('createUseRecords (server)', () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
-    mockQuery.mockResolvedValue({ records: [], total: 0 });
+    mockQuery.mockResolvedValue({ data: [], total: 0 });
   });
 
   it('returns named action functions', () => {
@@ -41,6 +41,49 @@ describe('createUseRecords (server)', () => {
     expect(typeof result.distinctOrders).toBe('function');
   });
 
+  // ─── getOrders: single id ────────────────────────────────────────────────
+
+  it('getOrders with a single id delegates to col.get', async () => {
+    mockGet.mockResolvedValue({ id: '1', name: 'A' });
+    const useOrders = createUseRecords('orders', collection);
+    const result = await useOrders().getOrders('1');
+    expect(mockGet).toHaveBeenCalledWith('1');
+    expect(result).toEqual({ id: '1', name: 'A' });
+  });
+
+  it('getOrders with a single id returns undefined when not found', async () => {
+    mockGet.mockResolvedValue(undefined);
+    const useOrders = createUseRecords('orders', collection);
+    const result = await useOrders().getOrders('missing');
+    expect(result).toBeUndefined();
+  });
+
+  // ─── getOrders: array of ids ─────────────────────────────────────────────
+
+  it('getOrders with an array of ids delegates to col.get and returns records', async () => {
+    mockGet.mockResolvedValue([{ id: '1' }, { id: '2' }]);
+    const useOrders = createUseRecords('orders', collection);
+    const result = await useOrders().getOrders(['1', '2']);
+    expect(mockGet).toHaveBeenCalledWith(['1', '2']);
+    expect(result).toEqual([{ id: '1' }, { id: '2' }]);
+  });
+
+  it('getOrders with an empty array delegates to col.get and returns empty array', async () => {
+    mockGet.mockResolvedValue([]);
+    const useOrders = createUseRecords('orders', collection);
+    const result = await useOrders().getOrders([]);
+    expect(mockGet).toHaveBeenCalledWith([]);
+    expect(result).toEqual([]);
+  });
+
+  it('queryOrders instance method returns named records and total', async () => {
+    mockQuery.mockResolvedValue({ data: [{ id: '1', name: 'A' }], total: 2 });
+    const useOrders = createUseRecords('orders', collection);
+    const result = await useOrders().queryOrders();
+    expect(result.orders).toEqual([{ id: '1', name: 'A' }]);
+    expect(result.totalOrders).toBe(2);
+  });
+
   it('query helper with no args calls underlying query with empty props', async () => {
     const useOrders = createUseRecords('orders', collection);
     await useOrders.query();
@@ -48,7 +91,7 @@ describe('createUseRecords (server)', () => {
   });
 
   it('query helper returns named records and total', async () => {
-    mockQuery.mockResolvedValue({ records: [{ id: '1', name: 'A' }], total: 3 });
+    mockQuery.mockResolvedValue({ data: [{ id: '1', name: 'A' }], total: 3 });
     const useOrders = createUseRecords('orders', collection);
     const result = await useOrders.query();
     expect(result.orders).toEqual([{ id: '1', name: 'A' }]);
@@ -71,11 +114,11 @@ describe('createUseRecords (server)', () => {
 
   it('merges additionalQueryProps into id-based query', async () => {
     const useOrders = createUseRecords('orders', collection, {
-      additionalQueryProps: { sorts: [{ field: 'name' as any, direction: 'asc' }] },
+      additionalQueryProps: { sorts: [['name', 'asc'] as any] },
     });
     await useOrders.query(['1']);
     expect(mockQuery).toHaveBeenCalledWith(
-      expect.objectContaining({ sorts: [{ field: 'name', direction: 'asc' }] }),
+      expect.objectContaining({ sorts: [['name', 'asc']] }),
     );
   });
 
@@ -115,21 +158,21 @@ describe('createUseRecords (server)', () => {
 
   it('merges additionalQueryProps into no-args query', async () => {
     const useOrders = createUseRecords('orders', collection, {
-      additionalQueryProps: { sorts: [{ field: 'name' as any, direction: 'asc' }] },
+      additionalQueryProps: { sorts: [['name', 'asc'] as any] },
     });
     await useOrders.query();
     expect(mockQuery).toHaveBeenCalledWith(
-      expect.objectContaining({ sorts: [{ field: 'name', direction: 'asc' }] }),
+      expect.objectContaining({ sorts: [['name', 'asc']] }),
     );
   });
 
   it('caller QueryProps win over additionalQueryProps', async () => {
     const useOrders = createUseRecords('orders', collection, {
-      additionalQueryProps: { sorts: [{ field: 'name' as any, direction: 'asc' }] },
+      additionalQueryProps: { sorts: [['name', 'asc'] as any] },
     });
-    await useOrders.query({ sorts: [{ field: 'createdAt' as any, direction: 'desc' }] });
+    await useOrders.query({ sorts: [['createdAt', 'desc'] as any] });
     expect(mockQuery).toHaveBeenCalledWith({
-      sorts: [{ field: 'createdAt', direction: 'desc' }],
+      sorts: [['createdAt', 'desc']],
     });
   });
 
@@ -141,5 +184,81 @@ describe('createUseRecords (server)', () => {
     expect(mockQuery).toHaveBeenCalledWith(
       expect.objectContaining({ filters: { id: { $in: ['1', '2'] } } }),
     );
+  });
+
+  // ─── Static get ──────────────────────────────────────────────────────────
+
+  it('static get with a single id delegates to col.get', async () => {
+    mockGet.mockResolvedValue({ id: '1', name: 'A' });
+    const useOrders = createUseRecords('orders', collection);
+    const result = await useOrders.get('1');
+    expect(mockGet).toHaveBeenCalledWith('1');
+    expect(result).toEqual({ id: '1', name: 'A' });
+  });
+
+  it('static get returns undefined when record not found', async () => {
+    mockGet.mockResolvedValue(undefined);
+    const useOrders = createUseRecords('orders', collection);
+    const result = await useOrders.get('missing');
+    expect(result).toBeUndefined();
+  });
+
+  it('static get with an array of ids returns array of records', async () => {
+    mockGet.mockResolvedValue([{ id: '1' }, { id: '2' }]);
+    const useOrders = createUseRecords('orders', collection);
+    const result = await useOrders.get(['1', '2']);
+    expect(mockGet).toHaveBeenCalledWith(['1', '2']);
+    expect(result).toEqual([{ id: '1' }, { id: '2' }]);
+  });
+
+  // ─── Static getAll ────────────────────────────────────────────────────────
+
+  it('static getAll delegates to col.getAll', async () => {
+    mockGetAll.mockResolvedValue([{ id: '1' }, { id: '2' }]);
+    const useOrders = createUseRecords('orders', collection);
+    const result = await useOrders.getAll();
+    expect(mockGetAll).toHaveBeenCalled();
+    expect(result).toEqual([{ id: '1' }, { id: '2' }]);
+  });
+
+  it('static getAll returns empty array when collection is empty', async () => {
+    mockGetAll.mockResolvedValue([]);
+    const useOrders = createUseRecords('orders', collection);
+    const result = await useOrders.getAll();
+    expect(result).toEqual([]);
+  });
+
+  // ─── Static find ─────────────────────────────────────────────────────────
+
+  it('static find delegates to col.find with the given filters', async () => {
+    mockFind.mockResolvedValue({ id: '1', status: 'active' });
+    const useOrders = createUseRecords('orders', collection);
+    const result = await useOrders.find({ status: 'active' } as any);
+    expect(mockFind).toHaveBeenCalledWith({ status: 'active' });
+    expect(result).toEqual({ id: '1', status: 'active' });
+  });
+
+  it('static find returns undefined when no match', async () => {
+    mockFind.mockResolvedValue(undefined);
+    const useOrders = createUseRecords('orders', collection);
+    const result = await useOrders.find({ status: 'gone' } as any);
+    expect(result).toBeUndefined();
+  });
+
+  // ─── Static distinct ──────────────────────────────────────────────────────
+
+  it('static distinct delegates to col.distinct with field', async () => {
+    mockDistinct.mockResolvedValue([{ id: '1', status: 'pending' }, { id: '2', status: 'active' }, { id: '3', status: 'closed' }]);
+    const useOrders = createUseRecords('orders', collection);
+    const result = await useOrders.distinct('status' as any);
+    expect(mockDistinct).toHaveBeenCalledWith({ field: 'status' });
+    expect(result).toEqual(['pending', 'active', 'closed']);
+  });
+
+  it('static distinct passes filters props to col.distinct', async () => {
+    mockDistinct.mockResolvedValue([{ id: '1', status: 'active' }]);
+    const useOrders = createUseRecords('orders', collection);
+    await useOrders.distinct('status' as any, { filters: { active: true } as any });
+    expect(mockDistinct).toHaveBeenCalledWith({ field: 'status', filters: { active: true } });
   });
 });

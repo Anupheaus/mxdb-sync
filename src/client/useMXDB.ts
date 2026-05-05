@@ -1,8 +1,10 @@
-import { useMemo, useRef, useState } from 'react';
+import { useContext, useMemo, useRef, useState } from 'react';
+import { is } from '@anupheaus/common';
 import { useSocketAPI } from '@anupheaus/socket-api/client';
 import { useSyncState } from './providers/client-to-server/SyncStateContext';
+import { DbsContext } from './providers/dbs/DbContext';
 
-export function useMXDBSync() {
+export function useMXDB() {
   const { getIsConnected, onConnectionStateChanged, getSocket, disconnect, connect } = useSocketAPI();
   const [isConnected, setIsConnected] = useState(useMemo(() => getIsConnected(), []));
   const { isSyncing, onSyncStateChanged } = useSyncState();
@@ -10,6 +12,7 @@ export function useMXDBSync() {
   const [clientId, setClientId] = useState(() => getIsConnected() ? getSocket()?.id : undefined);
   const updateWhenSyncChangedRef = useRef(false);
   const [isSyncingState, setIsSyncingState] = useState(isSyncing);
+  const { dbs, lastDb } = useContext(DbsContext);
 
   onConnectionStateChanged((newIsConnected, socket) => {
     if (!updateWhenChangedRef.current) return;
@@ -27,6 +30,7 @@ export function useMXDBSync() {
     },
     get isConnected() { updateWhenChangedRef.current = true; return isConnected; },
     get clientId() { updateWhenChangedRef.current = true; return clientId; },
+    get isDbReady() { return !is.empty(lastDb) && dbs.has(lastDb); },
     onConnectionStateChanged,
     disconnect,
     connect,

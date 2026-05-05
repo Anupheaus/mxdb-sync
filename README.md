@@ -122,7 +122,7 @@ Use `createInvite` to generate a time-limited URL you can send to a user. They o
 ## Client setup
 
 ```tsx
-import { MXDBSync, useCollection, useMXDBSync } from '@anupheaus/mxdb-sync/client';
+import { MXDBSync, useCollection, useMXDB } from '@anupheaus/mxdb-sync/client';
 import { products } from './collections';
 
 function App() {
@@ -143,7 +143,7 @@ function Content() {
   const { get, getAll, upsert, remove, query, find, distinct,
           useGet, useGetAll, useQuery, useDistinct,
           useSubscription, tableRequest, onChange } = useCollection(products);
-  const { isConnected, clientId, isSynchronising } = useMXDBSync();
+  const { isConnected, clientId, isSynchronising } = useMXDB();
   // ...
 }
 ```
@@ -169,7 +169,7 @@ function Content() {
 
 `tableRequest`, `onChange`, `config` — utilities.
 
-**`useMXDBSync()`** returns:
+**`useMXDB()`** returns:
 
 | Property | Description |
 |----------|-------------|

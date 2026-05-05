@@ -215,8 +215,8 @@ describe('recordDiff — anonymous arrays', () => {
     const b = rec({ tags: ['a', 'z'] });
     const ops = recordDiff(a, b);
     expect(ops).toHaveLength(1);
-    expect(ops[0]).toMatchObject({ type: OperationType.Replace, path: 'tags.1', value: 'z' });
-    expect(ops[0].hash).toBeDefined(); // hash of old element for anchoring
+    expect(ops[0]!).toMatchObject({ type: OperationType.Replace, path: 'tags.1', value: 'z' });
+    expect(ops[0]!.hash).toBeDefined(); // hash of old element for anchoring
   });
 
   it('emits Add for appended element', () => {
@@ -231,8 +231,8 @@ describe('recordDiff — anonymous arrays', () => {
     const b = rec({ tags: ['a'] });
     const ops = recordDiff(a, b);
     expect(ops).toHaveLength(1);
-    expect(ops[0]).toMatchObject({ type: OperationType.Remove, path: 'tags.1' });
-    expect(ops[0].hash).toBeDefined();
+    expect(ops[0]!).toMatchObject({ type: OperationType.Remove, path: 'tags.1' });
+    expect(ops[0]!.hash).toBeDefined();
   });
 
   it('handles empty array → populated array', () => {
@@ -262,11 +262,11 @@ describe('recordDiff — rich types treated as scalars', () => {
     const b = rec({ createdAt: d2 });
     const ops = recordDiff(a, b);
     expect(ops).toHaveLength(1);
-    expect(ops[0].type).toBe(OperationType.Replace);
-    expect(ops[0].path).toBe('createdAt');
+    expect(ops[0]!.type).toBe(OperationType.Replace);
+    expect(ops[0]!.path).toBe('createdAt');
     // Date objects are serialised to ISO strings for JSON-safe storage
-    expect(typeof ops[0].value).toBe('string');
-    expect(new Date(ops[0].value as string).getTime()).toBe(d2.getTime());
+    expect(typeof ops[0]!.value).toBe('string');
+    expect(new Date(ops[0]!.value as string).getTime()).toBe(d2.getTime());
   });
 
   it('emits no ops for identical Date values', () => {

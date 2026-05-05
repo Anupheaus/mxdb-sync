@@ -1,15 +1,18 @@
 import type { AnyObject, DataFilters, Record } from '@anupheaus/common';
 import { is } from '@anupheaus/common';
-import type { MXDBCollection, QueryProps, QueryResults } from '../../../common';
+import type { MXDBCollection, QueryProps } from '../../../common';
 import type { ExtensionsType, RecordTypeOfCollection, RemoveDasherized } from '../../../common/models';
 import { useCollection } from '../../collections/useCollection';
 
 export type ServerUseRecords<Name extends string, T extends Record, Helpers extends AnyObject = {}> =
-  & { [key in Name as `query${Capitalize<RemoveDasherized<Name>>}`]: (props?: QueryProps<T>) => Promise<QueryResults<T>>; }
+  & { [key in Name as `query${Capitalize<RemoveDasherized<Name>>}`]: (props?: QueryProps<T>) => Promise<ServerUseRecordsQuery<Name, T>>; }
   & { [key in Name as `getAll${Capitalize<RemoveDasherized<Name>>}`]: () => Promise<T[]>; }
   & { [key in Name as `upsert${Capitalize<RemoveDasherized<Name>>}`]: (records: T | T[]) => Promise<void>; }
   & { [key in Name as `remove${Capitalize<RemoveDasherized<Name>>}`]: (records: T | T[] | string | string[]) => Promise<void>; }
-  & { [key in Name as `get${Capitalize<RemoveDasherized<Name>>}`]: (id: string) => Promise<T | undefined>; }
+  & { [key in Name as `get${Capitalize<RemoveDasherized<Name>>}`]: {
+    (id: string): Promise<T | undefined>;
+    (ids: string[]): Promise<T[]>;
+  }; }
   & { [key in Name as `find${Capitalize<RemoveDasherized<Name>>}`]: (filters: DataFilters<T>) => Promise<T | undefined>; }
   & { [key in Name as `distinct${Capitalize<RemoveDasherized<Name>>}`]: <K extends keyof T>(field: K, props?: { filters?: DataFilters<T> }) => Promise<T[K][]>; }
   & Helpers;
@@ -41,6 +44,11 @@ type UseRecordsHook<
   query(): Promise<ServerUseRecordsQuery<Name, T>>;
   query(ids: (T | string)[]): Promise<ServerUseRecordsQuery<Name, T>>;
   query(props: QueryProps<T>): Promise<ServerUseRecordsQuery<Name, T>>;
+  get(id: string): Promise<T | undefined>;
+  get(ids: string[]): Promise<T[]>;
+  getAll(): Promise<T[]>;
+  find(filters: DataFilters<T>): Promise<T | undefined>;
+  distinct<K extends keyof T>(field: K, props?: { filters?: DataFilters<T> }): Promise<T[K][]>;
 }) & Extensions;
 
 const isQueryProps = (arg: unknown): arg is QueryProps<Record> =>
@@ -65,7 +73,10 @@ export function createUseRecords<
     const col = useCollection(collection);
 
     const baseResult = {
-      [`query${pascalName}`]: col.query,
+      [`query${pascalName}`]: async (props?: QueryProps<T>) => {
+        const { data, total } = await col.query(props ?? {});
+        return { [camelName]: data, [`total${pascalName}`]: total } as ServerUseRecordsQuery<Name, T>;
+      },
       [`getAll${pascalName}`]: col.getAll,
       [`upsert${pascalName}`]: col.upsert,
       [`remove${pascalName}`]: col.remove,
@@ -103,15 +114,42 @@ export function createUseRecords<
       resolvedProps = additionalQueryProps ?? {};
     }
 
-    const { records, total } = await col.query(resolvedProps);
+    const { data, total } = await col.query(resolvedProps);
 
     return {
-      [camelName]: records,
+      [camelName]: data,
       [`total${pascalName}`]: total,
     } as ServerUseRecordsQuery<Name, T>;
   }
 
+  async function staticGet(id: string): Promise<T | undefined>;
+  async function staticGet(ids: string[]): Promise<T[]>;
+  async function staticGet(idOrIds: string | string[]): Promise<T | undefined | T[]> {
+    const col = useCollection(collection);
+    return col.get(idOrIds as any);
+  }
+
+  async function staticGetAll(): Promise<T[]> {
+    const col = useCollection(collection);
+    return col.getAll();
+  }
+
+  async function staticFind(filters: DataFilters<T>): Promise<T | undefined> {
+    const col = useCollection(collection);
+    return col.find(filters);
+  }
+
+  async function staticDistinct<K extends keyof T>(field: K, props?: { filters?: DataFilters<T> }): Promise<T[K][]> {
+    const col = useCollection(collection);
+    const records = await col.distinct({ field, ...props });
+    return records.map(r => r[field]);
+  }
+
   (useRecords as any).query = useRecordsQuery;
+  (useRecords as any).get = staticGet;
+  (useRecords as any).getAll = staticGetAll;
+  (useRecords as any).find = staticFind;
+  (useRecords as any).distinct = staticDistinct;
 
   if (is.plainObject(extensions)) {
     Object.entries(extensions).forEach(([key, fn]) => {

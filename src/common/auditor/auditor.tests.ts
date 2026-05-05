@@ -49,7 +49,7 @@ describe('auditor core API', () => {
 
       expect(audit2.entries.length).toBe(2);
       const updatedEntry = audit2.entries[1];
-      expect(updatedEntry.type).toBe(AuditEntryType.Updated);
+      expect(updatedEntry!.type).toBe(AuditEntryType.Updated);
 
       const replayed = auditor.createRecordFrom(audit2);
       expect(replayed).toMatchObject({ id: 'r1', name: 'v2' });
@@ -109,7 +109,7 @@ describe('auditor core API', () => {
       const anchorId = anchorEntry.id;
       const collapsed = auditor.collapseToAnchor(audit, anchorId);
 
-      expect(collapsed.entries[0].id).toBe(anchorId);
+      expect(collapsed.entries[0]!.id).toBe(anchorId);
       expect(collapsed.entries.length).toBe(1 + (audit.entries.length - 2));
     });
   });

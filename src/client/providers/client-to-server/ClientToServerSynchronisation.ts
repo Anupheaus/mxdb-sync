@@ -181,7 +181,7 @@ export class ClientToServerSynchronisation {
       for (const id of item.deletedRecordIds ?? []) {
         const states = collection.getStatesSync([id]);
         if (states.length === 0) continue;
-        const anchor = auditor.getLastEntryId({ id, entries: states[0].audit });
+        const anchor = auditor.getLastEntryId({ id, entries: states[0]!.audit });
         if (anchor == null) continue;
         collection.collapseAuditSync(id, anchor);
         collection.applyServerDeleteSync([id]);

@@ -3,6 +3,7 @@ import { Logger } from '@anupheaus/common';
 import { startAuthenticatedServer } from './startAuthenticatedServer';
 import { getDevices, enableDevice, disableDevice } from './auth/deviceManagement';
 import { registerDevAuthRoute } from './auth/registerDevAuthRoute';
+import { useAuthentication } from '@anupheaus/socket-api/server';
 import type { ServerConfig, ServerInstance } from './internalModels';
 
 /**
@@ -29,7 +30,7 @@ export async function startServer(config: ServerConfig): Promise<ServerInstance>
     await db.getMongoDb();
     logger!.info('[startServer] Mongo connected');
 
-    const { app, useAuthentication } = await startAuthenticatedServer({
+    const { app } = await startAuthenticatedServer({
       ...config,
       db,
       logger,
@@ -45,8 +46,7 @@ export async function startServer(config: ServerConfig): Promise<ServerInstance>
 
     return {
       app,
-      createInvite: async (userId: string, baseUrl: string) =>
-        useAuthentication().createInvite(userId, baseUrl),
+      createInvite: async options => useAuthentication().createInvite(options),
       getDevices: async (userId: string) => getDevices(db, userId),
       enableDevice: async (requestId: string) => enableDevice(db, requestId),
       disableDevice: async (requestId: string) => disableDevice(db, requestId),

@@ -28,7 +28,7 @@ function orderedUlids(count: number): string[] {
   const ids = Array.from({ length: count }, () => auditor.generateUlid());
   ids.sort();
   for (let i = 1; i < ids.length; i++) {
-    expect(ids[i] > ids[i - 1]).toBe(true);
+    expect(ids[i]! > ids[i - 1]!).toBe(true);
   }
   return ids;
 }
@@ -47,16 +47,16 @@ function linearAudit(recordId: string, states: TestRecord[], ids: string[]): Aud
 
   const created: AuditCreatedEntry<TestRecord> = {
     type: AuditEntryType.Created,
-    id: ids[0],
-    record: cloneRecord(states[0]),
+    id: ids[0]!,
+    record: cloneRecord(states[0]!),
   };
 
   const updates: AuditUpdateEntry[] = [];
   for (let i = 0; i < states.length - 1; i++) {
     updates.push({
       type: AuditEntryType.Updated,
-      id: ids[i + 1],
-      ops: recordDiff(states[i], states[i + 1]),
+      id: ids[i + 1]!,
+      ops: recordDiff(states[i]!, states[i + 1]!),
     });
   }
 
@@ -134,7 +134,7 @@ describe('auditor replay — real-world lifecycles', () => {
     }
     const ids = orderedUlids(states.length);
     const audit = linearAudit('doc-e', states, ids);
-    expectReplayMatches(audit, states[states.length - 1]);
+    expectReplayMatches(audit, states[states.length - 1]!);
   });
 });
 
@@ -170,7 +170,7 @@ describe('auditor merge — batched / shuffled ULID order', () => {
     const sortedMerged = [...server.entries].sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
     expect(sortedMerged.map(e => e.id)).toEqual(sortedFull.map(e => e.id));
 
-    expectReplayMatches(server, states[states.length - 1]);
+    expectReplayMatches(server, states[states.length - 1]!);
   });
 
   it('merges interleaved partitions: server and clients each hold a subset; sort restores linear replay', () => {
@@ -185,9 +185,9 @@ describe('auditor merge — batched / shuffled ULID order', () => {
     const entries = linearAudit('rec-2', states, ids).entries;
 
     const E = entries;
-    const serverPart = [E[0], E[3], E[6]] as AuditEntry<TestRecord>[];
-    const clientBatch1 = [E[1], E[4]] as AuditEntry<TestRecord>[];
-    const clientBatch2 = [E[2], E[5]] as AuditEntry<TestRecord>[];
+    const serverPart = [E[0]!, E[3]!, E[6]!] as AuditEntry<TestRecord>[];
+    const clientBatch1 = [E[1]!, E[4]!] as AuditEntry<TestRecord>[];
+    const clientBatch2 = [E[2]!, E[5]!] as AuditEntry<TestRecord>[];
 
     let server: AuditOf<TestRecord> = { id: 'rec-2', entries: serverPart };
 
@@ -202,7 +202,7 @@ describe('auditor merge — batched / shuffled ULID order', () => {
     const sortedMerged = [...server.entries].sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
     expect(sortedMerged.map(e => e.id)).toEqual(entries.map(e => e.id));
 
-    expectReplayMatches(server, states[n - 1]);
+    expectReplayMatches(server, states[n - 1]!);
   });
 
   it('merges three small pending batches out of ULID order into a Created head', () => {
@@ -216,8 +216,8 @@ describe('auditor merge — batched / shuffled ULID order', () => {
     const ids = orderedUlids(states.length);
     const entries = linearAudit('rec-3', states, ids).entries;
 
-    const server: AuditOf<TestRecord> = { id: 'rec-3', entries: [entries[0]] };
-    const batches = [[entries[3], entries[1]], [entries[4]], [entries[2]]];
+    const server: AuditOf<TestRecord> = { id: 'rec-3', entries: [entries[0]!] };
+    const batches = [[entries[3]!, entries[1]!], [entries[4]!], [entries[2]!]];
 
     let merged = server;
     for (const raw of batches) {
@@ -228,7 +228,7 @@ describe('auditor merge — batched / shuffled ULID order', () => {
       merged = auditor.merge(merged, pending);
     }
 
-    expectReplayMatches(merged, states[states.length - 1]);
+    expectReplayMatches(merged, states[states.length - 1]!);
   });
 
   it('merge + replay with delete and restore entries in shuffled batches', () => {
@@ -240,23 +240,23 @@ describe('auditor merge — batched / shuffled ULID order', () => {
 
     const created: AuditCreatedEntry<TestRecord> = {
       type: AuditEntryType.Created,
-      id: ids[0],
+      id: ids[0]!,
       record: cloneRecord(s0),
     };
     const u1: AuditUpdateEntry = {
       type: AuditEntryType.Updated,
-      id: ids[1],
+      id: ids[1]!,
       ops: recordDiff(s0, s1),
     };
     const u2: AuditUpdateEntry = {
       type: AuditEntryType.Updated,
-      id: ids[2],
+      id: ids[2]!,
       ops: recordDiff(s1, s2),
     };
-    const del: AuditDeletedEntry = { type: AuditEntryType.Deleted, id: ids[3] };
+    const del: AuditDeletedEntry = { type: AuditEntryType.Deleted, id: ids[3]! };
     const rest: AuditRestoredEntry<TestRecord> = {
       type: AuditEntryType.Restored,
-      id: ids[4],
+      id: ids[4]!,
       record: cloneRecord(afterRestore),
     };
 
@@ -284,11 +284,11 @@ describe('auditor merge — batched / shuffled ULID order', () => {
     const withPayload: AuditOf<TestRecord> = {
       id: 'rec-5',
       entries: [
-        { type: AuditEntryType.Created, id: ids[0], record: cloneRecord(s0) },
-        { type: AuditEntryType.Updated, id: ids[1], ops: recordDiff(s0, s1) },
-        { type: AuditEntryType.Deleted, id: ids[2] },
-        { type: AuditEntryType.Restored, id: ids[3], record: cloneRecord(snapshot) },
-        { type: AuditEntryType.Updated, id: ids[4], ops: recordDiff(snapshot, { ...snapshot, value: 51 }) },
+        { type: AuditEntryType.Created, id: ids[0]!, record: cloneRecord(s0) },
+        { type: AuditEntryType.Updated, id: ids[1]!, ops: recordDiff(s0, s1) },
+        { type: AuditEntryType.Deleted, id: ids[2]! },
+        { type: AuditEntryType.Restored, id: ids[3]!, record: cloneRecord(snapshot) },
+        { type: AuditEntryType.Updated, id: ids[4]!, ops: recordDiff(snapshot, { ...snapshot, value: 51 }) },
       ],
     };
     expect(auditor.createRecordFrom(withPayload)).toMatchObject({ name: 'snapshot', value: 51 });
@@ -296,11 +296,11 @@ describe('auditor merge — batched / shuffled ULID order', () => {
     const fromShadow: AuditOf<TestRecord> = {
       id: 'rec-5',
       entries: [
-        { type: AuditEntryType.Created, id: ids[0], record: cloneRecord(s0) },
-        { type: AuditEntryType.Updated, id: ids[1], ops: recordDiff(s0, s1) },
-        { type: AuditEntryType.Deleted, id: ids[2] },
-        { type: AuditEntryType.Restored, id: ids[3] },
-        { type: AuditEntryType.Updated, id: ids[4], ops: recordDiff(s1, { ...s1, value: 2 }) },
+        { type: AuditEntryType.Created, id: ids[0]!, record: cloneRecord(s0) },
+        { type: AuditEntryType.Updated, id: ids[1]!, ops: recordDiff(s0, s1) },
+        { type: AuditEntryType.Deleted, id: ids[2]! },
+        { type: AuditEntryType.Restored, id: ids[3]! },
+        { type: AuditEntryType.Updated, id: ids[4]!, ops: recordDiff(s1, { ...s1, value: 2 }) },
       ],
     };
     expect(auditor.createRecordFrom(fromShadow)).toMatchObject({ name: 'b', value: 2 });

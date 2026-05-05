@@ -84,7 +84,7 @@ export const ClientToServerSyncProvider = createComponent('ClientToServerSyncPro
     return { cr, c2s };
   }, []);
 
-  // Track dispatching state for consumers (useMXDBSync)
+  // Track dispatching state for consumers (useMXDB)
   const [isDispatching, setIsDispatching] = useState(false);
   useEffect(() => c2s.onDispatchingChanged(setIsDispatching), [c2s]);
 

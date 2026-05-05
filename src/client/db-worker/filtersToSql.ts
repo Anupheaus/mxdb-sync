@@ -129,7 +129,7 @@ function translateValue(path: string[], value: unknown): SqlFragment {
   }
 
   if (parts.length === 0) return { where: '', params: [] };
-  return { where: parts.length === 1 ? parts[0] : `(${parts.join(' AND ')})`, params };
+  return { where: parts.length === 1 ? parts[0]! : `(${parts.join(' AND ')})`, params };
 }
 
 // ─── Top-level translator ─────────────────────────────────────────────────────
@@ -159,14 +159,14 @@ export function filtersToSql<T extends object = object>(
       const branches = (value as DataFilters<T>[]).map(f => filtersToSql(f));
       const orParts = branches.map(b => b.where).filter(w => w);
       if (orParts.length > 0) {
-        parts.push(orParts.length === 1 ? orParts[0] : `(${orParts.join(' OR ')})`);
+        parts.push(orParts.length === 1 ? orParts[0]! : `(${orParts.join(' OR ')})`);
         branches.forEach(b => params.push(...b.params));
       }
     } else if (key === '$and') {
       const branches = (value as DataFilters<T>[]).map(f => filtersToSql(f));
       const andParts = branches.map(b => b.where).filter(w => w);
       if (andParts.length > 0) {
-        parts.push(andParts.length === 1 ? andParts[0] : `(${andParts.join(' AND ')})`);
+        parts.push(andParts.length === 1 ? andParts[0]! : `(${andParts.join(' AND ')})`);
         branches.forEach(b => params.push(...b.params));
       }
     } else {
@@ -180,7 +180,7 @@ export function filtersToSql<T extends object = object>(
 
   if (parts.length === 0) return { where: '', params: [] };
   return {
-    where: parts.length === 1 ? parts[0] : parts.join(' AND '),
+    where: parts.length === 1 ? parts[0]! : parts.join(' AND '),
     params,
   };
 }

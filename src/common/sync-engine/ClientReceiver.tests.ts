@@ -77,10 +77,10 @@ describe('ClientReceiver', () => {
       const result = cr.process(payload);
       expect(onUpdate).toHaveBeenCalledOnce();
       const updateArg = onUpdate.mock.calls[0][0] as MXDBUpdateRequest;
-      expect(updateArg[0].collectionName).toBe('items');
-      expect(updateArg[0].records?.[0].record).toEqual(record);
-      expect(updateArg[0].records?.[0].lastAuditEntryId).toBe('ulid-1');
-      expect(result[0].successfulRecordIds).toContain('r1');
+      expect(updateArg[0]!.collectionName).toBe('items');
+      expect(updateArg[0]!.records?.[0]!.record).toEqual(record);
+      expect(updateArg[0]!.records?.[0]!.lastAuditEntryId).toBe('ulid-1');
+      expect(result[0]!.successfulRecordIds).toContain('r1');
     });
 
     it('accepts delete cursor with no local state — already consistent, includes in successfulRecordIds', () => {

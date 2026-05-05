@@ -207,10 +207,10 @@ describe('ClientDispatcher', () => {
     await vi.runAllTimersAsync();
 
     expect(onUpdate).toHaveBeenCalledOnce();
-    const updateArg = onUpdate.mock.calls[0][0] as MXDBUpdateRequest;
-    expect(updateArg[0].collectionName).toBe('items');
-    expect(updateArg[0].records?.[0].record).toEqual(record);
-    expect(updateArg[0].records?.[0].lastAuditEntryId).toBeDefined();
+    const updateArg = onUpdate.mock.calls[0]![0] as MXDBUpdateRequest;
+    expect(updateArg[0]!.collectionName).toBe('items');
+    expect(updateArg[0]!.records?.[0]!.record).toEqual(record);
+    expect(updateArg[0]!.records?.[0]!.lastAuditEntryId).toBeDefined();
   });
 
   it('duplicate enqueue is no-op', async () => {
@@ -428,10 +428,10 @@ describe('ClientDispatcher', () => {
     await vi.runAllTimersAsync();
 
     expect(onUpdate).toHaveBeenCalledOnce();
-    const updateArg = onUpdate.mock.calls[0][0] as MXDBUpdateRequest;
+    const updateArg = onUpdate.mock.calls[0]![0] as MXDBUpdateRequest;
     // Must be the insertion-order last entry ('aaa-low-client-update'), NOT
     // the max-ULID entry ('zzz-high-branched-anchor').
-    expect(updateArg[0].records?.[0].lastAuditEntryId).toBe('aaa-low-client-update');
+    expect(updateArg[0]!.records?.[0]!.lastAuditEntryId).toBe('aaa-low-client-update');
   });
 
   describe('communication error retry', () => {

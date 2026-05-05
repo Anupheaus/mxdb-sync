@@ -1,10 +1,8 @@
-import type { Record } from '@anupheaus/common';
+import type { SocketAPIAccount, SocketAPIUser } from '@anupheaus/socket-api/common';
 
-export interface MXDBUserDetails extends Record {
-  name: string;
-  displayName?: string;
-  [key: string]: unknown;
-}
+export interface MXDBUser extends SocketAPIUser { }
+
+export interface MXDBAccount extends SocketAPIAccount { }
 
 /**
  * MongoDB `mxdb_authentication` document — one row per registered device.

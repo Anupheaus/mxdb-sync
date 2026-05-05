@@ -7,7 +7,7 @@ How to integrate **@anupheaus/mxdb-sync** in a **React** app. This matches the c
 ## 1. Install and import
 
 ```ts
-import { MXDBSync, useCollection, useMXDBSync, useRecord } from '@anupheaus/mxdb-sync/client';
+import { MXDBSync, useCollection, useMXDB, useRecord } from '@anupheaus/mxdb-sync/client';
 import { defineCollection } from '@anupheaus/mxdb-sync/common';
 ```
 
@@ -81,7 +81,7 @@ Local mutations go through **`DbCollection`**, which **`ClientToServerProvider`*
 
 ## 7. Connection and sync UI
 
-**`useMXDBSync()`** exposes:
+**`useMXDB()`** exposes:
 
 - **`isConnected`**, **`clientId`**
 - **`onConnectionStateChanged`** (from socket-api)

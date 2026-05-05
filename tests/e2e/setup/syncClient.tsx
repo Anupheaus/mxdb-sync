@@ -1,7 +1,7 @@
 import { useImperativeHandle, forwardRef, useEffect, useRef } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import https from 'https';
-import { useMXDBSync } from '../../../src/client';
+import { useMXDB } from '../../../src/client';
 import { useCollection } from '../../../src/client/hooks/useCollection';
 import {
   DbsProvider,
@@ -41,7 +41,7 @@ function fetchDevSessionToken(serverUrl: string, userId: string): Promise<string
       if (res.statusCode !== 200) { resolve(undefined); return; }
       const setCookie = res.headers['set-cookie'];
       if (!setCookie) { resolve(undefined); return; }
-      const cookieStr = Array.isArray(setCookie) ? setCookie[0] : setCookie;
+      const cookieStr = (Array.isArray(setCookie) ? setCookie[0] : setCookie) ?? '';
       const match = cookieStr.match(/socketapi_session=([^;]+)/);
       resolve(match?.[1] ?? undefined);
     });
@@ -81,7 +81,7 @@ export interface SyncClientDriverRef {
 
 /**
  * Driver component that runs inside MXDBSync and exposes upsert / disconnect / reconnect via ref.
- * Uses real useCollection and useMXDBSync so the same code path as the app is exercised.
+ * Uses real useCollection and useMXDB so the same code path as the app is exercised.
  */
 const SyncClientDriverInner = forwardRef<SyncClientDriverRef, { clientId: string; log: (event: RunLogEvent, detail?: RunLogDetail) => void; }>(
   function SyncClientDriverInner({ clientId, log }, ref) {
@@ -89,7 +89,7 @@ const SyncClientDriverInner = forwardRef<SyncClientDriverRef, { clientId: string
     // Ensure a live query subscription exists so the real sync pipeline is exercised.
     // (Without an active query/subscription, some setups won't push local mutations to the server.)
     useQuery();
-    const { disconnect, connect, isSynchronising } = useMXDBSync();
+    const { disconnect, connect, isSynchronising } = useMXDB();
     const { getIsConnected, getSocket } = useSocketAPI();
     const c2sInstance = useClientToServerSyncInstance();
     const { db } = useDb();

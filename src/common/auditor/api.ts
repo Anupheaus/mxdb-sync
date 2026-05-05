@@ -90,12 +90,12 @@ export function getAuditDocumentRejectionReason(value: unknown): string | null {
 function isSyncOnlyAuditValid<T extends MXDBRecord>(audit: AnyAuditOf<T>): boolean {
   const e = entriesOf(audit);
   if (e.length === 0 || e.length > 2) return false;
-  const t0 = e[0].type;
+  const t0 = e[0]!.type;
   if (t0 !== AuditEntryType.Created && t0 !== AuditEntryType.Branched) return false;
   if (e.length === 1) return true;
-  const t1 = e[1].type;
+  const t1 = e[1]!.type;
   if (t1 === AuditEntryType.Updated) {
-    const ops = (e[1] as AuditUpdateEntry).ops;
+    const ops = (e[1]! as AuditUpdateEntry).ops;
     return Array.isArray(ops) && ops.length === 0;
   }
   return t1 === AuditEntryType.Deleted;
@@ -106,16 +106,16 @@ function syncOnlyAuditRejectionReason<T extends MXDBRecord>(audit: AnyAuditOf<T>
   const e = entriesOf(audit);
   if (e.length === 0) return 'sync-only mode requires 1–2 entries (got 0)';
   if (e.length > 2) return `sync-only mode requires at most 2 entries (got ${e.length})`;
-  const t0 = e[0].type;
+  const t0 = e[0]!.type;
   if (t0 !== AuditEntryType.Created && t0 !== AuditEntryType.Branched) {
     return `sync-only first entry must be Created(0) or Branched(4) (got type ${t0})`;
   }
   if (e.length < 2) {
     return 'sync-only audit rejected after anchor check (unexpected entry count)';
   }
-  const t1 = e[1].type;
+  const t1 = e[1]!.type;
   if (t1 === AuditEntryType.Updated) {
-    const ops = (e[1] as AuditUpdateEntry).ops;
+    const ops = (e[1]! as AuditUpdateEntry).ops;
     if (!Array.isArray(ops)) return 'sync-only second entry Updated.ops must be an array';
     return `sync-only second entry Updated must have empty ops (got ops.length=${ops.length})`;
   }
@@ -125,14 +125,14 @@ function syncOnlyAuditRejectionReason<T extends MXDBRecord>(audit: AnyAuditOf<T>
 function isFullAuditValid<T extends MXDBRecord>(audit: AnyAuditOf<T>): boolean {
   const e = entriesOf(audit);
   if (e.length === 0) return false;
-  const t0 = e[0].type;
+  const t0 = e[0]!.type;
   if (t0 !== AuditEntryType.Created && t0 !== AuditEntryType.Branched) return false;
   // Two-entry "anchor + empty Updated" is the sync-only pending shape, not a full microdiff audit.
   if (
     e.length === 2 &&
-    e[1].type === AuditEntryType.Updated &&
-    Array.isArray((e[1] as AuditUpdateEntry).ops) &&
-    (e[1] as AuditUpdateEntry).ops.length === 0
+    e[1]!.type === AuditEntryType.Updated &&
+    Array.isArray((e[1]! as AuditUpdateEntry).ops) &&
+    (e[1]! as AuditUpdateEntry).ops.length === 0
   ) {
     return false;
   }
@@ -143,15 +143,15 @@ function fullAuditRejectionReason<T extends MXDBRecord>(audit: AnyAuditOf<T>): s
   if (isFullAuditValid(audit)) return null;
   const e = entriesOf(audit);
   if (e.length === 0) return 'full audit requires at least one entry (got 0)';
-  const t0 = e[0].type;
+  const t0 = e[0]!.type;
   if (t0 !== AuditEntryType.Created && t0 !== AuditEntryType.Branched) {
     return `full audit first entry must be Created(0) or Branched(4) (got type ${t0})`;
   }
   if (
     e.length === 2 &&
-    e[1].type === AuditEntryType.Updated &&
-    Array.isArray((e[1] as AuditUpdateEntry).ops) &&
-    (e[1] as AuditUpdateEntry).ops.length === 0
+    e[1]!.type === AuditEntryType.Updated &&
+    Array.isArray((e[1]! as AuditUpdateEntry).ops) &&
+    (e[1]! as AuditUpdateEntry).ops.length === 0
   ) {
     return 'full audit rejects anchor + empty Updated (sync-only pending shape); use non-empty ops or more entries';
   }
@@ -460,7 +460,7 @@ export function getBranchUlid<T extends MXDBRecord>(audit: AnyAuditOf<T>): strin
 export function getLastEntryId<T extends MXDBRecord>(audit: AnyAuditOf<T>): string | undefined {
   const list = entriesOf(audit);
   if (list.length === 0) return undefined;
-  return list.reduce((max, e) => (e.id > max ? e.id : max), list[0].id);
+  return list.reduce((max, e) => (e.id > max ? e.id : max), list[0]!.id);
 }
 
 /** Millisecond timestamp of the lexicographically latest audit entry (same ordering as {@link getLastEntryId}). */

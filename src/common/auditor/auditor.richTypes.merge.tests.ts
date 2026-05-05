@@ -37,11 +37,11 @@ describe('auditor — id-bearing array elements with nested DateTime', () => {
     const ops = recordDiff(a, b);
 
     expect(ops).toHaveLength(1);
-    expect(ops[0].type).toBe(OperationType.Add);
-    expect(ops[0].path).toBe('tags.[id:t1]');
+    expect(ops[0]!.type).toBe(OperationType.Add);
+    expect(ops[0]!.path).toBe('tags.[id:t1]');
 
     // The stored value must be JSON-safe (expiresAt as ISO string, not DateTime object)
-    const storedValue = ops[0].value as { id: string; label: string; expiresAt: unknown };
+    const storedValue = ops[0]!.value as { id: string; label: string; expiresAt: unknown };
     expect(typeof storedValue.expiresAt).toBe('string');
     expect(DateTime.fromISO(storedValue.expiresAt as string).toMillis()).toBe(dt.toMillis());
   });
@@ -58,8 +58,8 @@ describe('auditor — id-bearing array elements with nested DateTime', () => {
 
     const materialised = auditor.createRecordFrom(audit2, original) as EventRecord;
     expect(materialised?.tags).toHaveLength(1);
-    expect(DateTime.isDateTime(materialised?.tags?.[0].expiresAt)).toBe(true);
-    expect((materialised?.tags?.[0].expiresAt as DateTime).toMillis()).toBe(dt.toMillis());
+    expect(DateTime.isDateTime(materialised?.tags?.[0]?.expiresAt)).toBe(true);
+    expect((materialised?.tags?.[0]?.expiresAt as DateTime).toMillis()).toBe(dt.toMillis());
   });
 
   it('update element with DateTime field in id-bearing array round-trips correctly', () => {
@@ -73,8 +73,8 @@ describe('auditor — id-bearing array elements with nested DateTime', () => {
     const audit2 = auditor.updateAuditWith(updated, audit1, original);
 
     const materialised = auditor.createRecordFrom(audit2, original) as EventRecord;
-    expect(DateTime.isDateTime(materialised?.tags?.[0].expiresAt)).toBe(true);
-    expect((materialised?.tags?.[0].expiresAt as DateTime).toMillis()).toBe(dt2.toMillis());
+    expect(DateTime.isDateTime(materialised?.tags?.[0]?.expiresAt)).toBe(true);
+    expect((materialised?.tags?.[0]?.expiresAt as DateTime).toMillis()).toBe(dt2.toMillis());
   });
 });
 
@@ -92,16 +92,16 @@ describe('auditor merge — DateTime fields survive merge + replay', () => {
 
     const serverAudit: AuditOf<EventRecord> = {
       id: 'ev1',
-      entries: [{ type: AuditEntryType.Created, id: ids[0], record: { ...s0 } }],
+      entries: [{ type: AuditEntryType.Created, id: ids[0]!, record: { ...s0 } }],
     };
     const update1: AuditUpdateEntry = {
       type: AuditEntryType.Updated,
-      id: ids[1],
+      id: ids[1]!,
       ops: recordDiff(s0, s1),
     };
     const update2: AuditUpdateEntry = {
       type: AuditEntryType.Updated,
-      id: ids[2],
+      id: ids[2]!,
       ops: recordDiff(s1, s2),
     };
 
@@ -133,7 +133,7 @@ describe('auditor merge — DateTime fields survive merge + replay', () => {
 
     // Simulate: server has Created + last entry; client batches hold middle entries
     const allEntries = [...audit.entries];
-    const serverEntries = [allEntries[0], allEntries[allEntries.length - 1]];
+    const serverEntries = [allEntries[0]!, allEntries[allEntries.length - 1]!];
     const clientBatch: AuditOf<EventRecord> = {
       id: 'ev1',
       entries: allEntries.slice(1, -1),
@@ -175,7 +175,7 @@ describe('auditor — anonymous array elements with DateTime fields', () => {
     const ops = recordDiff(a, b);
 
     expect(ops).toHaveLength(1);
-    const stored = ops[0].value as { value: unknown };
+    const stored = ops[0]!.value as { value: unknown };
     expect(typeof stored.value).toBe('string');
     expect(DateTime.fromISO(stored.value as string).toMillis()).toBe(dt.toMillis());
   });
@@ -187,7 +187,7 @@ describe('auditor — anonymous array elements with DateTime fields', () => {
 
     const materialised = auditor.createRecordFrom(audit) as EventRecord;
     expect(materialised?.timestamps).toHaveLength(1);
-    expect(DateTime.isDateTime(materialised?.timestamps?.[0].value)).toBe(true);
-    expect((materialised?.timestamps?.[0].value as DateTime).toMillis()).toBe(dt.toMillis());
+    expect(DateTime.isDateTime(materialised?.timestamps?.[0]?.value)).toBe(true);
+    expect((materialised?.timestamps?.[0]?.value as DateTime).toMillis()).toBe(dt.toMillis());
   });
 });

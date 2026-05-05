@@ -165,9 +165,9 @@ describe('ServerDispatcher', () => {
 
       await vi.runAllTimersAsync();
       expect(onDispatch).toHaveBeenCalledOnce();
-      const arg = onDispatch.mock.calls[0][0] as MXDBRecordCursors;
+      const arg = onDispatch.mock.calls[0]![0] as MXDBRecordCursors;
       const rec = arg[0]?.records[0];
-      expect('recordId' in rec).toBe(true);
+      expect('recordId' in rec!).toBe(true);
       expect((rec as any).recordId).toBe('r1');
     });
 
@@ -230,9 +230,9 @@ describe('ServerDispatcher', () => {
       sd.push([{ collectionName: 'items', records: [makeActiveCursor('r1', 'hash2', 'u3')] }]);
       await vi.runAllTimersAsync();
       expect(onDispatch).toHaveBeenCalledOnce();
-      const arg = onDispatch.mock.calls[0][0] as MXDBRecordCursors;
+      const arg = onDispatch.mock.calls[0]![0] as MXDBRecordCursors;
       const rec = arg[0]?.records[0];
-      expect('recordId' in rec).toBe(true);
+      expect('recordId' in rec!).toBe(true);
     });
   });
 
@@ -270,9 +270,9 @@ describe('ServerDispatcher', () => {
       await vi.runAllTimersAsync();
 
       expect(onDispatch).toHaveBeenCalledOnce();
-      const arg = onDispatch.mock.calls[0][0] as MXDBRecordCursors;
-      expect(arg[0].records).toHaveLength(1);
-      expect((arg[0].records[0] as any).recordId).toBe('unknown-r');
+      const arg = onDispatch.mock.calls[0]![0] as MXDBRecordCursors;
+      expect(arg[0]!.records).toHaveLength(1);
+      expect((arg[0]!.records[0]! as any).recordId).toBe('unknown-r');
     });
 
     it('change-stream delete (addToFilter=false) for unknown record still records tombstone', async () => {
@@ -349,9 +349,9 @@ describe('ServerDispatcher', () => {
 
       // The delete cursor MUST reach the client — tombstone was cleared by updateFilter
       expect(onDispatch).toHaveBeenCalledOnce();
-      const arg = onDispatch.mock.calls[0][0] as MXDBRecordCursors;
-      expect(arg[0].records).toHaveLength(1);
-      expect((arg[0].records[0] as any).recordId).toBe('r1');
+      const arg = onDispatch.mock.calls[0]![0] as MXDBRecordCursors;
+      expect(arg[0]!.records).toHaveLength(1);
+      expect((arg[0]!.records[0]! as any).recordId).toBe('r1');
     });
 
     it('does NOT clear tombstone when client reports deleted record via updateFilter', async () => {

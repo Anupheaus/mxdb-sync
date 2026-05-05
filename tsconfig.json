@@ -25,6 +25,7 @@
     "target": "ES2022",
     "sourceMap": true,
     "jsx": "react-jsx",
+    "experimentalDecorators": true,
     "paths": {
       "@anupheaus/common": [
         "../common/src"
@@ -48,7 +49,8 @@
   },
   "ts-node": {
     "compilerOptions": {
-      "module": "CommonJS"
+      "module": "CommonJS",
+      "moduleResolution": "node"
     }
   },
   "include": [

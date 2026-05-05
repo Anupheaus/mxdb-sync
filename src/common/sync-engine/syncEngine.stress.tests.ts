@@ -339,7 +339,7 @@ describe('sync engine stress test', () => {
       (_, i) => `record-${i.toString().padStart(3, '0')}`,
     );
     for (let i = 0; i < NUM_INITIAL_RECORDS; i++) {
-      const record = makeInitialRecord(initialRecordIds[i], i);
+      const record = makeInitialRecord(initialRecordIds[i]!, i);
       const audit = auditor.createAuditFrom(record);
       serverCol.set(record.id, { record, audit: audit.entries as AuditEntry[] });
     }
@@ -401,8 +401,8 @@ describe('sync engine stress test', () => {
     const clientDispatchers: ClientDispatcher[] = [];
 
     for (let clientIdx = 0; clientIdx < NUM_CLIENTS; clientIdx++) {
-      const cr = clientReceivers[clientIdx];
-      const clientStore = clientStores[clientIdx];
+      const cr = clientReceivers[clientIdx]!;
+      const clientStore = clientStores[clientIdx]!;
 
       const sd = new ServerDispatcher(makeLogger(`sd-${clientIdx}`), {
         onDispatch: async (payload: MXDBRecordCursors) => {
@@ -446,7 +446,7 @@ describe('sync engine stress test', () => {
           // know which client originated a given change in production.
           if (broadcastPayload.length > 0) {
             for (let i = 0; i < serverDispatchers.length; i++) {
-              serverDispatchers[i].push(broadcastPayload);
+              serverDispatchers[i]!.push(broadcastPayload);
             }
           }
 
@@ -493,7 +493,7 @@ describe('sync engine stress test', () => {
 
     for (let i = 0; i < NUM_CLIENTS; i++) {
       await new Promise(resolve => setTimeout(resolve, 50));
-      clientDispatchers[i].start();
+      clientDispatchers[i]!.start();
     }
 
     // ── Update loop: creates, updates, and deletes for UPDATE_DURATION_MS ───
@@ -502,8 +502,8 @@ describe('sync engine stress test', () => {
     const updatePromises: Promise<void>[] = [];
 
     for (let clientIdx = 0; clientIdx < NUM_CLIENTS; clientIdx++) {
-      const clientStore = clientStores[clientIdx];
-      const cd = clientDispatchers[clientIdx];
+      const clientStore = clientStores[clientIdx]!;
+      const cd = clientDispatchers[clientIdx]!;
 
       const updateLoop = async () => {
         while (running) {
@@ -534,7 +534,7 @@ describe('sync engine stress test', () => {
 
           } else if (roll < 0.25 && activeIds.length > 5) {
             // ── Delete ────────────────────────────────────────────────────
-            const recordId = activeIds[Math.floor(Math.random() * activeIds.length)];
+            const recordId = activeIds[Math.floor(Math.random() * activeIds.length)]!;
             const entry = clientCol.get(recordId) as ActiveStoreEntry;
             const currentAudit = { id: recordId, entries: entry.audit as any };
             const deletedAudit = auditor.delete(currentAudit);
@@ -544,7 +544,7 @@ describe('sync engine stress test', () => {
 
           } else if (activeIds.length > 0) {
             // ── Update ────────────────────────────────────────────────────
-            const recordId = activeIds[Math.floor(Math.random() * activeIds.length)];
+            const recordId = activeIds[Math.floor(Math.random() * activeIds.length)]!;
             const entry = clientCol.get(recordId) as ActiveStoreEntry;
             const updatedRecord: ItemRecord = {
               ...entry.record,
@@ -617,7 +617,7 @@ describe('sync engine stress test', () => {
       let shown = 0;
 
       for (let clientIdx = 0; clientIdx < NUM_CLIENTS && shown < 5; clientIdx++) {
-        const clientCol = clientStores[clientIdx].get(COLLECTION_NAME)!;
+        const clientCol = clientStores[clientIdx]!.get(COLLECTION_NAME)!;
         const clientActive = [...clientCol.entries()].filter(([, e]) => isActiveEntry(e));
         const clientDeleted = [...clientCol.entries()].filter(([, e]) => !isActiveEntry(e));
 
@@ -668,12 +668,12 @@ describe('sync engine stress test', () => {
       // Pull ids out of the resurrection-refusal errors so we can trace them too
       for (const err of loggedErrors) {
         const m = err.match(/resurrect tombstoned ([A-Za-z0-9-]+) in/);
-        if (m) stuckIds.add(m[1]);
+        if (m) stuckIds.add(m[1]!);
       }
       const stuckByClient = new Map<string, number>();
       const serverColData2 = serverStore.get(COLLECTION_NAME)!;
       for (let ci = 0; ci < clientStores.length; ci++) {
-        const cs = clientStores[ci];
+        const cs = clientStores[ci]!;
         const col = cs.get(COLLECTION_NAME) ?? new Map();
         for (const [id, entry] of col) {
           if (isActiveEntry(entry) && !isActiveEntry(serverColData2.get(id) ?? {} as StoreEntry)) {

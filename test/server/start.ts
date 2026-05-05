@@ -44,8 +44,6 @@ async function start() {
       clientLoggingService: () => loggerService,
       onGetUserDetails: async (userId) => ({
         id: userId,
-        name: 'Tony Hales',
-        displayName: 'Tony Hales',
       }),
     });
     configureStaticFiles(app as any);

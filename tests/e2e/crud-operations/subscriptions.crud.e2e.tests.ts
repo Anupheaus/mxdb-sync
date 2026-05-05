@@ -732,7 +732,7 @@ describe('e2e cross-subscription edge case tests', () => {
 
     expect(b.getGetAllSubscriptionSnapshot()).toHaveLength(2);
     expect(b.getQuerySnapshot().records).toHaveLength(1);
-    expect(b.getQuerySnapshot().records[0].id).toBe(idSpecial);
+    expect(b.getQuerySnapshot().records[0]!.id).toBe(idSpecial);
   }, 120_000);
 
   it('B on getAll, C on query subscription: each client gets its appropriate view after same upsert', async () => {

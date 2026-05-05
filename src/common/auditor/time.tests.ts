@@ -23,7 +23,7 @@ describe('generateUlid', () => {
     const ids = Array.from({ length: 10 }, () => generateUlid());
     for (let i = 1; i < ids.length; i++) {
       // Lexicographic order == temporal order for ULIDs
-      expect(ids[i] >= ids[i - 1]).toBe(true);
+      expect(ids[i]! >= ids[i - 1]!).toBe(true);
     }
   });
 
@@ -93,7 +93,7 @@ describe('setClockDrift', () => {
     setClockDrift(1_000);
     const ids = Array.from({ length: 5 }, () => generateUlid());
     for (let i = 1; i < ids.length; i++) {
-      expect(ids[i] >= ids[i - 1]).toBe(true);
+      expect(ids[i]! >= ids[i - 1]!).toBe(true);
     }
   });
 });

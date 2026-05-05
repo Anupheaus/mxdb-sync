@@ -275,7 +275,7 @@ function dispatchMessage(port: MessagePort, senderPortId: string, data: WorkerRe
 // ─── SharedWorker entry point ─────────────────────────────────────────────────
 
 (self as unknown as SharedWorkerGlobalScope).onconnect = (event: MessageEvent) => {
-  const port: MessagePort = event.ports[0];
+  const port: MessagePort = event.ports[0]!;
   port.start();
 
   let senderPortId = '';

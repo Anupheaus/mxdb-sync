@@ -3,7 +3,7 @@ import { getCollectionExtensions, useCollection } from '../collections';
 import { useDb, useServerToClientSynchronisation } from '../providers';
 import { createServerCollectionSubscription } from './createServerCollectionSubscription';
 import { pushSubscriptionResultRecords } from './pushSubscriptionResultRecords';
-import { useLogger, useSocketAPI } from '@anupheaus/socket-api/server';
+import { useAuthentication, useLogger } from '@anupheaus/socket-api/server';
 import type { DataRequest } from '@anupheaus/common';
 
 export const serverQuerySubscription = createServerCollectionSubscription<string[]>()(mxdbQuerySubscription,
@@ -21,7 +21,7 @@ export const serverQuerySubscription = createServerCollectionSubscription<string
     const extensions = dbCollection.collection != null ? getCollectionExtensions(dbCollection.collection) : undefined;
     let baseRequest: DataRequest = { filters, pagination, sorts };
     if (extensions?.onQuery != null) {
-      const userId = (() => { try { return useSocketAPI().user?.id; } catch { return undefined; } })();
+      const userId = (() => { try { return useAuthentication().user?.id; } catch { return undefined; } })();
       const modified = await extensions.onQuery({ request: baseRequest, userId });
       if (modified != null) baseRequest = modified;
     }

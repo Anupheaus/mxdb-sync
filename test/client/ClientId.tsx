@@ -1,10 +1,10 @@
 import { Button, createComponent, Flex } from '@anupheaus/react-ui';
-import { useMXDBSync, useMXDBSignOut } from '../../src/client';
-import { useUser } from '@anupheaus/socket-api/client';
+import { useMXDB, useMXDBSignOut } from '../../src/client';
+import { useAuthentication } from '@anupheaus/socket-api/client';
 
 export const ClientId = createComponent('ClientId', () => {
-  const { clientId } = useMXDBSync();
-  const { user } = useUser();
+  const { clientId } = useMXDB();
+  const { user } = useAuthentication();
   const signOut = useMXDBSignOut();
 
   return <Flex isVertical disableGrow>

@@ -6,7 +6,7 @@ export function createFind<RecordType extends Record>(query: Query<RecordType>) 
     if (is.function(onResponse)) {
       await query({ filters }, ({ records }) => {
         if (records.length === 0) return;
-        onResponse?.(records[0]);
+        onResponse?.(records[0]!);
       });
     } else {
       return query({ filters });

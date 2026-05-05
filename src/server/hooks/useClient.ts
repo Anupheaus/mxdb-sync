@@ -1,5 +1,5 @@
 import { Logger } from '@anupheaus/common';
-import { useSocketAPI } from '@anupheaus/socket-api/server';
+import { useClient as useSocketApiClient } from '@anupheaus/socket-api/server';
 import {
   subscriptionDataGet,
   subscriptionDataIsAvailable,
@@ -7,22 +7,19 @@ import {
 } from '../subscriptionDataStore';
 
 export function useClient() {
-  const result = useSocketAPI();
+  const socket = useSocketApiClient();
 
   function getLogger(subLoggerName?: string) {
     const parentLogger = Logger.getCurrent() ?? new Logger('mxdb-sync');
-    const client = result.getClient();
-    const clientLogger = parentLogger.createSubLogger(client?.id ?? 'admin');
+    const clientLogger = parentLogger.createSubLogger(socket?.id ?? 'admin');
     if (subLoggerName != null) return clientLogger.createSubLogger(subLoggerName);
     return clientLogger;
   }
 
-  const additions = {
+  return {
     getLogger,
     isDataAvailable: subscriptionDataIsAvailable,
     getData: subscriptionDataGet,
     setData: subscriptionDataSet,
   };
-
-  return Object.assign(result, additions);
 }

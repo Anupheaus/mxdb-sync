@@ -96,7 +96,7 @@ export async function seedCollections(collections: MXDBCollection[]) {
     logger.silly(`Seeding "${collection.name}" collection...`);
     const startTime = Date.now();
     try {
-      const seedHash = seededData[collection.name];
+      const seedHash = seededData[collection.name] ?? '';
       const updateSeedHash = (newHash: string) => { seededData[collection.name] = newHash; };
       const subLogger = logger.createSubLogger(collection.name);
       const api = useCollection(collection);

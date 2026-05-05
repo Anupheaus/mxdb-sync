@@ -131,7 +131,7 @@ export function useSubscriptionWrapper<RecordType extends Record, Request extend
     if (isActionRequired) {
       logger.silly('Invoking action', { disable, isActionRequired, request });
       const result = await withTimeout(
-        actionResult[action.name]((onRequestTransform?.(request) ?? request) as RemoteRequest),
+        actionResult[action.name]!((onRequestTransform?.(request) ?? request) as RemoteRequest),
         ACTION_TIMEOUT_MS,
         `${action.name}(${collection.name})`,
       );

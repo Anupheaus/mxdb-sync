@@ -38,8 +38,8 @@ export function resolveArrayIndex(arr: unknown[], seg: string | number, hash?: s
   // Boxed-id: [id:abc] or [_id:abc]
   const boxed = String(seg).match(/^\[(_?id):(.+)\]$/);
   if (boxed) {
-    const field = boxed[1];
-    const val = boxed[2];
+    const field = boxed[1]!;
+    const val = boxed[2]!;
     const idx = arr.findIndex(el => el != null && typeof el === 'object' && String((el as Record<string, unknown>)[field]) === val);
     return idx >= 0 ? idx : undefined;
   }
@@ -75,7 +75,7 @@ export function applyOp(record: unknown, op: AuditOperation, logger?: Logger): u
 
   let parent: unknown = record;
   for (let i = 0; i < rawSegs.length - 1; i++) {
-    const seg = rawSegs[i];
+    const seg = rawSegs[i]!;
     if (parent == null || typeof parent !== 'object') {
       logger?.warn('[auditor] applyOp: missing parent — ignoring op', { path: op.path, resolvedTo: rawSegs.slice(0, i).join('.') });
       return record;
@@ -92,7 +92,7 @@ export function applyOp(record: unknown, op: AuditOperation, logger?: Logger): u
     }
   }
 
-  const lastSeg = rawSegs[rawSegs.length - 1];
+  const lastSeg = rawSegs[rawSegs.length - 1]!;
 
   if (parent == null || typeof parent !== 'object') {
     logger?.warn('[auditor] applyOp: missing parent for last segment — ignoring op', { path: op.path });
@@ -176,7 +176,7 @@ export function replayHistoryEndState<T extends MXDBRecord>(
   // the O(n log n) sort + array copy when entries are already in order.
   let needsSort = false;
   for (let i = 1; i < clean.length; i++) {
-    if (clean[i].id < clean[i - 1].id) { needsSort = true; break; }
+    if (clean[i]!.id < clean[i - 1]!.id) { needsSort = true; break; }
   }
   const sorted = needsSort ? [...clean].sort((a, b) => a.id < b.id ? -1 : a.id > b.id ? 1 : 0) : clean;
 

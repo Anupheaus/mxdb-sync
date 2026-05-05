@@ -94,7 +94,7 @@ export const clientToServerSyncAction = createServerActionHandler(
             collection.getAudit(item.recordIds),
             collection.get(item.recordIds),
           ]);
-          const liveById = new Map(liveRecords.map(r => [r.id, r]));
+          const liveById = new Map<string, MXDBRecord>(liveRecords.map((r: MXDBRecord) => [r.id, r] as [string, MXDBRecord]));
           const records: (MXDBActiveRecordState | MXDBDeletedRecordState)[] = [];
           for (const serverAudit of audits) {
             if (serverAudit == null) continue;

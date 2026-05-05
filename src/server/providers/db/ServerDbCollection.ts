@@ -4,7 +4,7 @@ import type { MXDBCollectionConfig, MXDBCollectionIndex } from '../../../common'
 import { configRegistry, type MongoDocOf, type MXDBCollection, type QueryProps, type DistinctProps } from '../../../common';
 import type { ClientSession, Collection, Db, IndexDescriptionInfo, Sort, SortDirection, WithId } from 'mongodb';
 import { dbUtils } from './db-utils';
-import { useSocketAPI } from '@anupheaus/socket-api/server';
+import { useAuthentication } from '@anupheaus/socket-api/server';
 import { DateTime } from 'luxon';
 import { auditor } from '../../../common';
 import type { AnyAuditOf, ServerAuditOf } from '../../../common';
@@ -637,7 +637,7 @@ export class ServerDbCollection<RecordType extends Record = Record> {
 
   #getActingUserId(): string {
     try {
-      const id = useSocketAPI().user?.id;
+      const id = useAuthentication().user?.id;
       if (id != null && String(id).length > 0) return String(id);
     } catch {
       // No socket context (e.g. background job)

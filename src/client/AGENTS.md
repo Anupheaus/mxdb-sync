@@ -12,12 +12,15 @@ Local state lives in a per-device SQLite database (OPFS shared worker in browser
 
 ### Root exports
 - `MXDBSync.tsx` — root React provider; mount once at app root. Accepts `collections`, `host`, auth callbacks, error handlers.
-- `useMXDBSync.ts` — `useMXDBSync()` — connection state: `isConnected`, `clientId`, `isSynchronising`, test disconnect helpers
+- `useMXDB.ts` — `useMXDB()` — connection state: `isConnected`, `clientId`, `isSynchronising`, test disconnect helpers
 - `useRecord.ts` — `useRecord(id | localCopy, collection)` — optimistic form-edit hook with server-rebase semantics
 - `internalModels.ts` — client-private types
 
 ### Hooks (`hooks/`)
-- `useCollection(collection)` — primary API (imperative + reactive). See [hooks/useCollection/AGENTS.md](hooks/useCollection/AGENTS.md).
+See [hooks/AGENTS.md](hooks/AGENTS.md) for the full directory. Key exports:
+- `useCollection(collection)` — primary raw API (imperative + reactive). See [hooks/useCollection/AGENTS.md](hooks/useCollection/AGENTS.md).
+- `createUseRecord(name, collection, options)` — factory: returns a named single-record hook with auto-save, hydration, helpers, and extensions.
+- `createUseRecords(name, collection, options?)` — factory: returns a named collection hook with a reactive `.query()` sub-hook.
 - `useAuth()` — auth state for the current device
 - `useMXDBSignOut()` — sign out of current device
 - `useMXDBUserId()` — current user id
@@ -40,6 +43,7 @@ React context providers composing the `MXDBSync` tree. See [providers/AGENTS.md]
 
 ## Related
 
+- [hooks/AGENTS.md](hooks/AGENTS.md) — all client hooks (factories, primitives, utilities)
 - [hooks/useCollection/AGENTS.md](hooks/useCollection/AGENTS.md) — collection API
 - [db-worker/AGENTS.md](db-worker/AGENTS.md) — SQLite worker
 - [providers/AGENTS.md](providers/AGENTS.md) — React provider tree

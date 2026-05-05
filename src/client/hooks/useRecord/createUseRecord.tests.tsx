@@ -5,6 +5,11 @@ import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { createUseRecord } from './createUseRecord';
 
+const mockUseGet = vi.fn();
+const mockUseGetAll = vi.fn();
+const mockUseQuery = vi.fn();
+const mockUseDistinct = vi.fn();
+
 vi.mock('../../useRecord', () => ({
   useRecord: vi.fn(() => ({
     record: undefined,
@@ -12,6 +17,15 @@ vi.mock('../../useRecord', () => ({
     upsert: vi.fn(),
     remove: vi.fn(),
   })),
+}));
+
+vi.mock('../useCollection/useCollection', () => ({
+  useCollection: () => ({
+    useGet: mockUseGet,
+    useGetAll: mockUseGetAll,
+    useQuery: mockUseQuery,
+    useDistinct: mockUseDistinct,
+  }),
 }));
 
 /**
@@ -49,7 +63,13 @@ function renderHook<T>(useHook: () => T): { result: { current: T }; unmount: () 
 describe('createUseRecord (client)', () => {
   const collection = { name: 'orders', type: {} as any };
 
-  beforeEach(() => vi.clearAllMocks());
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockUseGet.mockReturnValue({ record: undefined, isLoading: false, error: undefined });
+    mockUseGetAll.mockReturnValue({ records: [], isLoading: false, error: undefined });
+    mockUseQuery.mockReturnValue({ records: [], isLoading: false, total: 0 });
+    mockUseDistinct.mockReturnValue({ values: [], isLoading: false, error: undefined });
+  });
 
   let unmount: (() => void) | undefined;
   afterEach(() => {
@@ -102,5 +122,131 @@ describe('createUseRecord (client)', () => {
     const { result, unmount: u } = renderHook(() => useOrder(undefined));
     unmount = u;
     expect((result.current as any).isSpecial).toBe(true);
+  });
+
+  // ─── Static get hook ─────────────────────────────────────────────────────
+
+  it('get static hook returns named record, isLoading, and error', () => {
+    mockUseGet.mockReturnValue({ record: { id: '1', name: 'A' }, isLoading: false, error: undefined });
+    const useOrder = createUseRecord('order', collection, {
+      hydrateRecord: (r) => r ?? { id: '', name: '' },
+    });
+    const { result, unmount: u } = renderHook(() => useOrder.get('1'));
+    unmount = u;
+    expect(result.current.order).toEqual({ id: '1', name: 'A' });
+    expect(result.current.isLoadingOrder).toBe(false);
+    expect(result.current.error).toBeUndefined();
+  });
+
+  it('get static hook delegates to useCollection.useGet with the given id', () => {
+    const useOrder = createUseRecord('order', collection, {
+      hydrateRecord: (r) => r ?? { id: '', name: '' },
+    });
+    renderHook(() => useOrder.get('abc'));
+    expect(mockUseGet).toHaveBeenCalledWith('abc');
+  });
+
+  it('get static hook returns undefined when record not found', () => {
+    mockUseGet.mockReturnValue({ record: undefined, isLoading: false, error: undefined });
+    const useOrder = createUseRecord('order', collection, {
+      hydrateRecord: (r) => r ?? { id: '', name: '' },
+    });
+    const { result, unmount: u } = renderHook(() => useOrder.get('missing'));
+    unmount = u;
+    expect(result.current.order).toBeUndefined();
+  });
+
+  // ─── Static getAll hook ───────────────────────────────────────────────────
+
+  it('getAll static hook returns named records, isLoading, and error', () => {
+    mockUseGetAll.mockReturnValue({ records: [{ id: '1' }], isLoading: false, error: undefined });
+    const useOrder = createUseRecord('order', collection, {
+      hydrateRecord: (r) => r ?? { id: '', name: '' },
+    });
+    const { result, unmount: u } = renderHook(() => useOrder.getAll());
+    unmount = u;
+    expect(result.current.order).toEqual([{ id: '1' }]);
+    expect(result.current.isLoadingOrder).toBe(false);
+  });
+
+  it('getAll static hook calls useCollection.useGetAll', () => {
+    const useOrder = createUseRecord('order', collection, {
+      hydrateRecord: (r) => r ?? { id: '', name: '' },
+    });
+    renderHook(() => useOrder.getAll());
+    expect(mockUseGetAll).toHaveBeenCalled();
+  });
+
+  // ─── Static find hook ─────────────────────────────────────────────────────
+
+  it('find static hook returns first matching record', () => {
+    mockUseQuery.mockReturnValue({ records: [{ id: '1', status: 'active' }], isLoading: false, total: 1 });
+    const useOrder = createUseRecord('order', collection, {
+      hydrateRecord: (r) => r ?? { id: '', name: '' },
+    });
+    const { result, unmount: u } = renderHook(() => useOrder.find({ status: 'active' } as any));
+    unmount = u;
+    expect(result.current.order).toEqual({ id: '1', status: 'active' });
+  });
+
+  it('find static hook passes filters to useQuery', () => {
+    const useOrder = createUseRecord('order', collection, {
+      hydrateRecord: (r) => r ?? { id: '', name: '' },
+    });
+    renderHook(() => useOrder.find({ status: 'active' } as any));
+    expect(mockUseQuery).toHaveBeenCalledWith({ filters: { status: 'active' } });
+  });
+
+  it('find static hook returns undefined when no records match', () => {
+    mockUseQuery.mockReturnValue({ records: [], isLoading: false, total: 0 });
+    const useOrder = createUseRecord('order', collection, {
+      hydrateRecord: (r) => r ?? { id: '', name: '' },
+    });
+    const { result, unmount: u } = renderHook(() => useOrder.find({ status: 'gone' } as any));
+    unmount = u;
+    expect(result.current.order).toBeUndefined();
+  });
+
+  // ─── Static query hook ────────────────────────────────────────────────────
+
+  it('query static hook returns named records, isLoading, and total', () => {
+    mockUseQuery.mockReturnValue({ records: [{ id: '1' }], isLoading: false, total: 2 });
+    const useOrder = createUseRecord('order', collection, {
+      hydrateRecord: (r) => r ?? { id: '', name: '' },
+    });
+    const { result, unmount: u } = renderHook(() => useOrder.query());
+    unmount = u;
+    expect(result.current.order).toEqual([{ id: '1' }]);
+    expect(result.current.isLoadingOrder).toBe(false);
+    expect(result.current.totalOrder).toBe(2);
+  });
+
+  it('query static hook passes QueryProps to useQuery', () => {
+    const useOrder = createUseRecord('order', collection, {
+      hydrateRecord: (r) => r ?? { id: '', name: '' },
+    });
+    renderHook(() => useOrder.query({ filters: { status: 'active' } as any }));
+    expect(mockUseQuery).toHaveBeenCalledWith({ filters: { status: 'active' } });
+  });
+
+  // ─── Static distinct hook ─────────────────────────────────────────────────
+
+  it('distinct static hook returns values, isLoading, and error', () => {
+    mockUseDistinct.mockReturnValue({ values: ['pending', 'active'], isLoading: false, error: undefined });
+    const useOrder = createUseRecord('order', collection, {
+      hydrateRecord: (r) => r ?? { id: '', name: '' },
+    });
+    const { result, unmount: u } = renderHook(() => useOrder.distinct('status' as any));
+    unmount = u;
+    expect(result.current.values).toEqual(['pending', 'active']);
+    expect(result.current.isLoadingOrder).toBe(false);
+  });
+
+  it('distinct static hook delegates to useCollection.useDistinct with the given field', () => {
+    const useOrder = createUseRecord('order', collection, {
+      hydrateRecord: (r) => r ?? { id: '', name: '' },
+    });
+    renderHook(() => useOrder.distinct('status' as any));
+    expect(mockUseDistinct).toHaveBeenCalledWith('status');
   });
 });

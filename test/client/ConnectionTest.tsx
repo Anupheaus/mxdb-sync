@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { Button, createComponent, createStyles, Flex } from '@anupheaus/react-ui';
-import { useMXDBSync } from '../../src/client';
+import { useMXDB } from '../../src/client';
 
 const useStyles = createStyles({
   connectionStatus: {
@@ -16,7 +16,7 @@ const useStyles = createStyles({
 
 export const ConnectionTest = createComponent('ConnectionTest', () => {
   const { css, join } = useStyles();
-  const { onConnectionStateChanged, disconnect, connect } = useMXDBSync();
+  const { onConnectionStateChanged, disconnect, connect } = useMXDB();
   const [isConnected, setIsConnected] = useState(false);
   onConnectionStateChanged(newIsConnected => setIsConnected(newIsConnected));
 

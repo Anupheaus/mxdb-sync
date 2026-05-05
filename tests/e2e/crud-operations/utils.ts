@@ -63,7 +63,7 @@ export async function seedRowWithBOnGetAll(
   await useServer().waitForLiveRecord(id);
   await b.subscribeGetAll();
   await waitUntilAsync(
-    () => b.getGetAllSubscriptionSnapshot().some(r => r.id === id),
+    async () => b.getGetAllSubscriptionSnapshot().some(r => r.id === id),
     'B getAll snapshot has seeded record',
     30_000,
   );

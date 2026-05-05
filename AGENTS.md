@@ -41,7 +41,7 @@ MXDB-Sync is a real-time synchronization library for MongoDB-backed collections 
 
 **Client Layer** (`src/client/`)
 - React provider (`MXDBSync`) 
-- Hooks (`useCollection`, `useMXDBSync`, `useRecord`)
+- Hooks (`useCollection`, `useMXDB`, `useRecord`)
 - Local IndexedDB storage with sync capabilities
 - Real-time updates and offline support
 

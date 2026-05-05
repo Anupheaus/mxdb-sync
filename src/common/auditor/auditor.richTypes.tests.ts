@@ -51,12 +51,12 @@ describe('recordDiff — Luxon DateTime fields', () => {
     const b = makeRichRecord({ lockedAt: DateTime.fromISO('2026-06-15T09:30:00.000Z') });
     const ops = recordDiff(a, b);
     expect(ops).toHaveLength(1);
-    expect(ops[0].type).toBe(OperationType.Replace);
-    expect(ops[0].path).toBe('lockedAt');
+    expect(ops[0]!.type).toBe(OperationType.Replace);
+    expect(ops[0]!.path).toBe('lockedAt');
     // Op value must be a JSON-safe ISO string, not a DateTime object
-    expect(typeof ops[0].value).toBe('string');
+    expect(typeof ops[0]!.value).toBe('string');
     // Verify it represents the same instant (zone may vary by machine locale)
-    expect(DateTime.fromISO(ops[0].value as string).toMillis()).toBe(
+    expect(DateTime.fromISO(ops[0]!.value as string).toMillis()).toBe(
       DateTime.fromISO('2026-06-15T09:30:00.000Z').toMillis(),
     );
   });
@@ -66,10 +66,10 @@ describe('recordDiff — Luxon DateTime fields', () => {
     const b = makeRichRecord({ lockedAt: DateTime.fromISO('2026-04-16T12:00:00.000Z') });
     const ops = recordDiff(a, b);
     expect(ops).toHaveLength(1);
-    expect(ops[0].type).toBe(OperationType.Add);
-    expect(ops[0].path).toBe('lockedAt');
-    expect(typeof ops[0].value).toBe('string');
-    expect(DateTime.fromISO(ops[0].value as string).toMillis()).toBe(
+    expect(ops[0]!.type).toBe(OperationType.Add);
+    expect(ops[0]!.path).toBe('lockedAt');
+    expect(typeof ops[0]!.value).toBe('string');
+    expect(DateTime.fromISO(ops[0]!.value as string).toMillis()).toBe(
       DateTime.fromISO('2026-04-16T12:00:00.000Z').toMillis(),
     );
   });
@@ -104,9 +104,9 @@ describe('recordDiff — Luxon DateTime fields', () => {
     const b = makeRichRecord({ nested: { updatedAt: DateTime.fromISO('2026-06-01T00:00:00.000Z') } });
     const ops = recordDiff(a, b);
     expect(ops).toHaveLength(1);
-    expect(ops[0].type).toBe(OperationType.Replace);
-    expect(ops[0].path).toBe('nested.updatedAt');
-    expect(typeof ops[0].value).toBe('string');
+    expect(ops[0]!.type).toBe(OperationType.Replace);
+    expect(ops[0]!.path).toBe('nested.updatedAt');
+    expect(typeof ops[0]!.value).toBe('string');
   });
 
   it('handles DateTime in id-bearing array elements', () => {
@@ -114,9 +114,9 @@ describe('recordDiff — Luxon DateTime fields', () => {
     const b = makeRichRecord({ tags: [{ id: 't1', expiresAt: DateTime.fromISO('2026-12-31T23:59:59.999Z') }] });
     const ops = recordDiff(a, b);
     expect(ops).toHaveLength(1);
-    expect(ops[0].type).toBe(OperationType.Replace);
-    expect(ops[0].path).toBe('tags.[id:t1].expiresAt');
-    expect(typeof ops[0].value).toBe('string');
+    expect(ops[0]!.type).toBe(OperationType.Replace);
+    expect(ops[0]!.path).toBe('tags.[id:t1].expiresAt');
+    expect(typeof ops[0]!.value).toBe('string');
   });
 
   it('produces no ops when multiple DateTime fields are identical across records', () => {
@@ -155,7 +155,7 @@ describe('auditor — DateTime round-trip through create / update / materialise'
     const audit2 = auditor.updateAuditWith(updated, audit1, original);
 
     expect(audit2.entries).toHaveLength(2);
-    expect(audit2.entries[1].type).toBe(AuditEntryType.Updated);
+    expect(audit2.entries[1]!.type).toBe(AuditEntryType.Updated);
 
     const materialised = auditor.createRecordFrom(audit2, original);
     expect(DateTime.isDateTime(materialised?.lockedAt)).toBe(true);
@@ -203,10 +203,10 @@ describe('recordDiff — JS Date fields', () => {
     const b = { id: 'r1', createdAt: new Date('2026-06-01T00:00:00.000Z') } as MXDBRecord & { createdAt: Date };
     const ops = recordDiff(a, b);
     expect(ops).toHaveLength(1);
-    expect(ops[0].type).toBe(OperationType.Replace);
-    expect(ops[0].path).toBe('createdAt');
-    expect(typeof ops[0].value).toBe('string');
-    expect(ops[0].value).toMatch(/2026-06-01/);
+    expect(ops[0]!.type).toBe(OperationType.Replace);
+    expect(ops[0]!.path).toBe('createdAt');
+    expect(typeof ops[0]!.value).toBe('string');
+    expect(ops[0]!.value).toMatch(/2026-06-01/);
   });
 
   it('does not traverse JS Date internals', () => {

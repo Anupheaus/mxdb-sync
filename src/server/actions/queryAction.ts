@@ -1,4 +1,4 @@
-import { createServerActionHandler, useSocketAPI } from '@anupheaus/socket-api/server';
+import { createServerActionHandler, useAuthentication } from '@anupheaus/socket-api/server';
 import { mxdbQueryAction } from '../../common';
 import { useDb, useServerToClientSynchronisation } from '../providers';
 import { getCollectionExtensions } from '../collections/extendCollection';
@@ -13,7 +13,7 @@ export async function handleQuery(params: { collectionName: string;[key: string]
   let queryRequest = request as DataRequest;
   const extensions = dbCollection.collection != null ? getCollectionExtensions(dbCollection.collection) : undefined;
   if (extensions?.onQuery != null) {
-    const userId = (() => { try { return useSocketAPI().user?.id; } catch { return undefined; } })();
+    const userId = (() => { try { return useAuthentication().user?.id; } catch { return undefined; } })();
     const modified = await extensions.onQuery({ request: queryRequest, userId });
     if (modified != null) queryRequest = modified;
   }

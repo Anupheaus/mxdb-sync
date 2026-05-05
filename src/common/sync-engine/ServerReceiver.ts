@@ -151,7 +151,7 @@ export class ServerReceiver {
           if (serverState == null) {
             // New record: first entry must be Created, or the sole entry is Deleted
             // (client is deleting a record the server already lost — already consistent).
-            if (strippedEntries[0].type !== AuditEntryType.Created) {
+            if (strippedEntries[0]!.type !== AuditEntryType.Created) {
               const isClientDeletion = strippedEntries.some(e => e.type === AuditEntryType.Deleted);
               if (isClientDeletion) {
                 if (!branchOnlySuccessIds.has(colName)) branchOnlySuccessIds.set(colName, []);
@@ -254,9 +254,9 @@ export class ServerReceiver {
       ]);
 
       const branchedHashByIdx = new Map<number, string>();
-      branchedActive.forEach((_, i) => branchedHashByIdx.set(i, branchedHashes[i]));
+      branchedActive.forEach((_, i) => branchedHashByIdx.set(i, branchedHashes[i]!));
       const persistedHashByKey = new Map<string, string>();
-      persistedActive.forEach((item, i) => persistedHashByKey.set(`${item.collectionName}::${item.recordId}`, persistedHashes[i]));
+      persistedActive.forEach((item, i) => persistedHashByKey.set(`${item.collectionName}::${item.recordId}`, persistedHashes[i]!));
 
       // Branched-only disparities
       let branchedActiveIdx = 0;

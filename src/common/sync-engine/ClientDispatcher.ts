@@ -320,7 +320,7 @@ export class ClientDispatcher {
           // would return that anchor id, leaving the pending entries after the
           // collapse point and keeping the audit non-branch-only permanently.
           const lastEntryId = state.audit.length > 0
-            ? state.audit[state.audit.length - 1].id
+            ? state.audit[state.audit.length - 1]!.id
             : undefined;
           if (lastEntryId != null) {
             records.push({ record: state.record, lastAuditEntryId: lastEntryId });

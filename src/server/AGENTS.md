@@ -35,8 +35,11 @@ Server-side reactive subscriptions: `getAll`, `query`, `distinct`. See [subscrip
 - `toServerAuditOf.ts` — promotes a client `AuditOf` to `ServerAuditOf` by adding `socketId`, `timestamp`
 
 ### Hooks (`hooks/`)
-- `useAuditor.ts` — server-side hook providing auditor helpers
-- `useClient.ts` — hook exposing client-specific socket context data (client id, user)
+See [hooks/AGENTS.md](hooks/AGENTS.md) for the full directory. Key exports:
+- `createUseRecord(name, collection, options)` — factory: returns an async function for loading, hydrating, and mutating a single record.
+- `createUseRecords(name, collection, options?)` — factory: returns a sync function for collection method access plus an async `.query()` helper.
+- `useAuditor()` — auditor helpers for the current socket context
+- `useClient()` — client id and user id for the current socket context
 
 ### S2C synchronisation
 - `ServerToClientSynchronisation.ts` — per-socket `ServerDispatcher` lifecycle; receives change-stream events and pushes S2C cursors to connected clients
@@ -65,6 +68,7 @@ Server-side reactive subscriptions: `getAll`, `query`, `distinct`. See [subscrip
 
 ## Related
 
+- [hooks/AGENTS.md](hooks/AGENTS.md) — server hooks (createUseRecord, createUseRecords, useAuditor, useClient)
 - [collections/AGENTS.md](collections/AGENTS.md) — extendCollection and useCollection
 - [actions/AGENTS.md](actions/AGENTS.md) — socket action handlers
 - [subscriptions/AGENTS.md](subscriptions/AGENTS.md) — server-side subscriptions

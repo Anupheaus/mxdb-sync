@@ -43,7 +43,7 @@ function killListenersOnPortWin32(p: number, logger: Logger) {
     const afterPort = line[idx + portToken.length];
     if (afterPort != null && afterPort !== ' ' && afterPort !== '\t') continue;
     const parts = line.trim().split(/\s+/);
-    const last = parts[parts.length - 1];
+    const last = parts[parts.length - 1] ?? '';
     const pid = Number.parseInt(last, 10);
     if (Number.isFinite(pid) && pid > 0 && pid !== process.pid) pids.add(pid);
   }

@@ -4,6 +4,7 @@ import { useDb } from './providers';
 import type { ServerToClientSynchronisation } from './ServerToClientSynchronisation';
 import type { Socket } from 'socket.io';
 import type { Unsubscribe } from '@anupheaus/common';
+import type { ServerDbChangeEvent } from './providers/db/server-db-models';
 
 const clientWatchSubscriptions = new WeakMap<Socket, Unsubscribe>();
 
@@ -26,7 +27,7 @@ export function addClientWatches(
   const db = useDb();
   if (clientWatchSubscriptions.has(client)) return;
 
-  clientWatchSubscriptions.set(client, db.onChange(async event => {
+  clientWatchSubscriptions.set(client, db.onChange(async (event: ServerDbChangeEvent) => {
     const collection = collections.findBy('name', event.collectionName);
     if (collection == null) return;
     const watchLog = !is.browser() ? Logger.getCurrent()?.createSubLogger('clientDbWatches') : undefined;

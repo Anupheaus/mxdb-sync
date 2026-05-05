@@ -7,14 +7,14 @@ import { ClientToServerSyncProvider, ClientToServerProvider } from '../providers
 import { ServerToClientProvider } from '../providers/server-to-client';
 import { deriveKey } from './deriveKey';
 import type { MXDBCollection, MXDBError } from '../../common';
-import type { MXDBUserDetails } from '../../common/models';
+import type { MXDBAccount, MXDBUser } from '../../common/models';
 
 interface Props {
   appName: string;
   collections: MXDBCollection[];
-  onPrfRef: MutableRefObject<((userId: string, prfOutput: ArrayBuffer) => void | Promise<void>) | undefined>;
+  onPrfRef: MutableRefObject<((userId: string, prfOutput: ArrayBuffer, accountId?: string) => void | Promise<void>) | undefined>;
   onError?(error: MXDBError): void;
-  onSignedIn?(user: MXDBUserDetails): void;
+  onSignedIn?(user: MXDBUser): void;
   onSignedOut?(): void;
   children?: ReactNode;
 }
@@ -29,11 +29,11 @@ export const MXDBSyncInner = createComponent('MXDBSyncInner', ({
   children,
 }: Props) => {
   const logger = useLogger('MXDBSyncInner');
-  const { user, signIn } = useAuthentication<MXDBUserDetails>();
+  const { user } = useAuthentication<MXDBUser, MXDBAccount>();
   const [encryptionKey, setEncryptionKey] = useState<Uint8Array | undefined>();
   const [dbName, setDbName] = useState<string | undefined>();
   const channelRef = useRef<BroadcastChannel | null>(null);
-  const prevUserRef = useRef<MXDBUserDetails | undefined>(undefined);
+  const prevUserRef = useRef<MXDBUser | undefined>(undefined);
   const reauthInProgressRef = useRef(false);
 
   // Dev bypass (non-production only)
@@ -70,11 +70,13 @@ export const MXDBSyncInner = createComponent('MXDBSyncInner', ({
 
   // Wire onPrf handler into the ref MXDBSync holds
   useEffect(() => {
-    onPrfRef.current = async (userId: string, prfOutput: ArrayBuffer) => {
+    onPrfRef.current = async (userId: string, prfOutput: ArrayBuffer, accountId?: string) => {
       try {
         const key = await deriveKey(prfOutput);
         setEncryptionKey(key);
-        setDbName(userId);
+        // accountId is used as the DB name when provided so that each account's data is
+        // stored separately; fall back to userId when no account scope is required.
+        setDbName(accountId ?? userId);
         reauthInProgressRef.current = false;
       } catch (err) {
         reauthInProgressRef.current = false;

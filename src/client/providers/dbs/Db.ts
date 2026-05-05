@@ -115,7 +115,7 @@ export class Db {
       [auditTable],
     );
     if (rows.length === 0) return; // table does not exist yet — nothing to migrate
-    const schemaSql = rows[0].sql ?? '';
+    const schemaSql = rows[0]!.sql ?? '';
     // Old schema has "id TEXT PRIMARY KEY" (single-column). New schema has "PRIMARY KEY (id, recordId)".
     if (!schemaSql.includes('id TEXT PRIMARY KEY')) return; // already migrated
 

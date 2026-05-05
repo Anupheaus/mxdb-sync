@@ -9,7 +9,7 @@ import { ConflictResolutionContext } from './providers';
 import { MXDBSyncInner } from './auth/MXDBSyncInner';
 import { setupBrowserTools } from './utils/setupBrowserTools';
 import type { MXDBCollection, MXDBError } from '../common';
-import type { MXDBUserDetails } from '../common/models';
+import type { MXDBUser } from '../common/models';
 
 interface Props {
   host?: string;
@@ -18,7 +18,7 @@ interface Props {
   autoConnect?: boolean;
   collections: MXDBCollection[];
   onDeviceDisabled?(): void;
-  onSignedIn?(user: MXDBUserDetails): void;
+  onSignedIn?(user: MXDBUser): void;
   onSignedOut?(): void;
   onError?(error: MXDBError): void;
   onConflictResolution?(message: string): Promise<boolean>;
@@ -49,10 +49,10 @@ export const MXDBSync = createComponent('MXDBSync', ({
 
   const conflictResolutionContext = useMemo(() => ({ onConflictResolution }), [onConflictResolution]);
 
-  const onPrfRef = useRef<((userId: string, prfOutput: ArrayBuffer) => void | Promise<void>) | undefined>(undefined);
+  const onPrfRef = useRef<((userId: string, prfOutput: ArrayBuffer, accountId?: string) => void | Promise<void>) | undefined>(undefined);
 
-  const handlePrf = useBound((userId: string, prfOutput: ArrayBuffer) => onPrfRef.current?.(userId, prfOutput) ?? undefined);
-  const handleSignedIn = useBound((user: SocketAPIUser) => onSignedIn?.(user as MXDBUserDetails));
+  const handlePrf = useBound((userId: string, prfOutput: ArrayBuffer, accountId?: string) => onPrfRef.current?.(userId, prfOutput, accountId) ?? undefined);
+  const handleSignedIn = useBound((user: SocketAPIUser) => onSignedIn?.(user as MXDBUser));
 
   return (
     <LoggerProvider logger={logger} loggerName="MXDB-Sync">

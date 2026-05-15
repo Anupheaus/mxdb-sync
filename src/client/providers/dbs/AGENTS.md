@@ -16,10 +16,6 @@ The `dbs` provider creates and holds the `Db` instance which in turn owns a `Sql
 - `Db.ts` — per-device database; wraps `SqliteWorkerClient`, creates `DbCollection` per config, wires `setOnExternalChange` for cross-tab reload
 - `DbCollection.ts` — per-collection API: `get`, `getAll`, `find`, `query`, `upsert`, `remove`, `onChange`, `reloadFromWorker`, `sync` (used by C2S/S2C providers to apply sync-engine results)
 
-### Data transformation
-- `transforms.ts` — (de)serialise records between JS objects and SQLite rows; handles Luxon `DateTime` ↔ ISO string, nested objects ↔ JSON column
-- `transforms.tests.ts` — unit tests for serialisation edge cases
-
 ### Models and utilities
 - `models.ts` — `MXDBCollectionEvent` (change notification shape)
 - `utils.ts` — internal helpers (e.g. audit entry encoding for SQLite)
@@ -34,7 +30,7 @@ The in-memory layer is refreshed on every write (local or incoming S2C). `reload
 ## Ambiguities and gotchas
 
 - **`DbCollection.sync()`** is called by the C2S/S2C providers to apply a `MXDBUpdateRequest` batch from the sync engine. It is not part of the public `useCollection` API.
-- **Luxon `DateTime` is stored as ISO strings** in SQLite. Always go through `transforms.ts`; do not write raw values to the SQLite layer.
+- **Luxon `DateTime` is stored as ISO strings** in SQLite. `DbCollection` uses `to.serialise`/`to.deserialise` from `@anupheaus/common` for all row reads and writes — do not write raw values to the SQLite layer.
 - **Auth table** — `Db` creates an internal `mxdb_authentication` table on open alongside the user-defined collection tables. It stores the encrypted auth token and is never exposed through `DbCollection`.
 
 ## Related

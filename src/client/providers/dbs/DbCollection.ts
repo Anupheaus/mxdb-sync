@@ -1,6 +1,5 @@
 import type { DataRequest, Logger, Record, Unsubscribe } from '@anupheaus/common';
-import { bind, is } from '@anupheaus/common';
-import { serialise, deserialise } from './transforms';
+import { bind, is, to } from '@anupheaus/common';
 import type { DistinctProps, DistinctResults, MXDBCollectionConfig, QueryResults } from '../../../common/models';
 import type { MXDBCollectionEvent } from './models';
 import { AUDIT_TABLE_SUFFIX, LIVE_TABLE_SUFFIX, q } from './dbs-consts';
@@ -44,7 +43,7 @@ function entriesToRows(recordId: string, entries: AuditEntry[]): AuditRow[] {
     recordId,
     type: entry.type,
     timestamp: decodeTime(entry.id),
-    record: 'record' in entry && entry.record != null ? JSON.stringify(serialise(entry.record as Record)) : null,
+    record: 'record' in entry && entry.record != null ? to.serialise(entry.record as Record) : null,
     ops: 'ops' in entry && entry.ops != null ? JSON.stringify(entry.ops) : null,
   }));
 }
@@ -53,11 +52,11 @@ function rowsToAuditOf<T extends Record = Record>(recordId: string, rows: AuditR
   const entries: AuditEntry<T>[] = rows.map(row => {
     const base = { id: row.id, type: row.type };
     if (row.type === AuditEntryType.Created) {
-      return { ...base, record: row.record != null ? deserialise(JSON.parse(row.record)) : null } as AuditEntry<T>;
+      return { ...base, record: row.record != null ? to.deserialise(row.record) : null } as AuditEntry<T>;
     }
     if (row.type === AuditEntryType.Restored) {
       if (row.record == null) return base as AuditEntry<T>;
-      return { ...base, record: deserialise(JSON.parse(row.record)) } as AuditEntry<T>;
+      return { ...base, record: to.deserialise(row.record) } as AuditEntry<T>;
     }
     if (row.type === AuditEntryType.Updated) {
       return { ...base, ops: row.ops != null ? JSON.parse(row.ops) : [] } as AuditEntry<T>;
@@ -419,7 +418,7 @@ export class DbCollection<RecordType extends Record = Record> {
     }
 
     const rows = await this.#worker.query<{ data: string; }>(dataSql, dataParams);
-    const records = rows.map(row => deserialise(JSON.parse(row.data)) as RecordType);
+    const records = rows.map(row => to.deserialise<RecordType>(row.data));
 
     return { records, total };
   }
@@ -533,7 +532,7 @@ export class DbCollection<RecordType extends Record = Record> {
 
     // Load live records
     const liveRows = await this.#worker.query<LiveRow>(`SELECT id, data FROM ${liveTable}`);
-    this.#records = new Map(liveRows.map(row => [row.id, deserialise(JSON.parse(row.data)) as RecordType]));
+    this.#records = new Map(liveRows.map(row => [row.id, to.deserialise<RecordType>(row.data)]));
 
     const auditTable = q(`${this.#name}${AUDIT_TABLE_SUFFIX}`);
     const auditRows = await this.#worker.query<AuditRow>(`SELECT id, recordId, type, timestamp, record, ops FROM ${auditTable} ORDER BY recordId, id`);
@@ -557,7 +556,7 @@ export class DbCollection<RecordType extends Record = Record> {
   async #persist(records: RecordType[], auditRecords: AuditOf<RecordType>[]): Promise<void> {
     const liveStmts = records.map(record => ({
       sql: `INSERT OR REPLACE INTO ${q(`${this.#name}${LIVE_TABLE_SUFFIX}`)}(id, data) VALUES (?, ?)`,
-      params: [record.id, JSON.stringify(serialise(record))],
+      params: [record.id, to.serialise(record)],
     }));
     const auditStmts = auditRecords.flatMap(audit => this.#auditToInsertStatements(audit));
 

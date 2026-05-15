@@ -20,7 +20,7 @@ MongoDB persistence layer: connection, collection CRUD with audit, change stream
 
 ### Models and utilities
 - `server-db-models.ts` — `ServerDbChangeEvent` and related shapes
-- `db-utils.ts` — MongoDB query helpers (filter and sort translation)
+- `db-transforms.ts` — MongoDB serialization/deserialization (`serialize`/`deserialize`): maps `id` ↔ `_id` and delegates type conversion (DateTime, errors) to `to.serialise`/`to.deserialise` from `@anupheaus/common`
 - `clientS2CStore.ts` — per-client store used by the S2C dispatch path
 
 ## Architecture
@@ -37,7 +37,7 @@ Change stream lifecycle:
 
 ## Ambiguities and gotchas
 
-- **`MongoDocOf<T>`** maps `id` → `_id` and Luxon `DateTime` → ISO string. All documents stored in MongoDB use this shape. Never write raw records directly to the MongoDB driver.
+- **`MongoDocOf<T>`** maps `id` → `_id` and Luxon `DateTime` → ISO string. All documents stored in MongoDB use this shape. `db-transforms.ts` handles the conversion — never write raw records directly to the MongoDB driver.
 - **Retry backoff in `sync()`** handles transient close errors (`isTransientMongoCloseError`); all other errors are returned as `SyncWriteResult.error` and reported back to the client without retrying.
 - **`changeStreamDebounceMs` trades latency for throughput** — lower values dispatch faster but increase per-event load. Default 20ms.
 - **`AsyncLocalStorage` context must be active** for `useDb()` to work. If you see "no ServerDb in context" in tests, ensure the call is wrapped in `provideDb`.

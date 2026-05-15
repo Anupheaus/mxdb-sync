@@ -1,15 +1,15 @@
-import type { Record } from '@anupheaus/common';
+import { to, type Record } from '@anupheaus/common';
 import type { MongoDocOf } from '../../../common';
 import type { WithId } from 'mongodb';
 
 function deserialize<RecordType extends Record>(record: MongoDocOf<RecordType> | WithId<MongoDocOf<RecordType>> | undefined): RecordType | undefined {
   if (record == null) return;
   const { _id, ...doc } = record;
-  return { ...doc, id: _id } as unknown as RecordType;
+  return to.deserialise<RecordType>({ ...doc, id: _id });
 }
 
 function serialize<RecordType extends Record>({ id, ...doc }: RecordType): MongoDocOf<RecordType> {
-  return { ...doc, _id: id } as MongoDocOf<RecordType>;
+  return JSON.parse(to.serialise({ ...doc, _id: id })) as MongoDocOf<RecordType>;
 }
 
 export const dbUtils = {

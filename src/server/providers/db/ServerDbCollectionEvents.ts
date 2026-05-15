@@ -2,7 +2,7 @@ import type { Logger, Record } from '@anupheaus/common';
 import type { ServerDbChangeEvent } from './server-db-models';
 import type { MongoDocOf } from '../../../common';
 import type { ChangeStreamDocument } from 'mongodb';
-import { dbUtils } from './db-utils';
+import { dbUtils } from './db-transforms';
 
 type OperationType = ServerDbChangeEvent['type'];
 

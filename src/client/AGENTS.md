@@ -35,7 +35,15 @@ React context providers composing the `MXDBSync` tree. See [providers/AGENTS.md]
 - `deriveKey.ts` — WebAuthn PRF extension key derivation; used to encrypt the auth token at rest in SQLite
 
 ### Components (`components/UseRecord/`)
-- `UseRecordContext.ts` / `useRecord.ts` — implementation backing the `useRecord` hook
+- `UseRecordContext.ts` — React context carrying the `useRecord` instance
+- `useRecord.ts` — core implementation of `useRecord`
+- `UseRecordWithRecord.tsx` — variant that accepts a full record object
+- `UseRecordWithRecordId.tsx` — variant that accepts a record id
+- `UseRecord.tsx` — top-level dispatcher (currently commented out / work in progress)
+
+### Utilities (`utils/`)
+- `actionTimeout.ts` — `withTimeout(promise, ms, label)` races a promise against a timeout rejection; `ACTION_TIMEOUT_MS = 5000` is the default socket action timeout. Used wherever socket calls could stall indefinitely.
+- `setupBrowserTools.ts` — `setupBrowserTools(appName)` attaches `window.mxdb.listDatabases()` (OPFS database inspector) and, in non-production builds, `setDevAuth` / `clearDevAuth` dev-auth shortcuts. Called at app startup.
 
 ## Architecture
 

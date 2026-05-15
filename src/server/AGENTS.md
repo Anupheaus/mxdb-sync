@@ -25,11 +25,7 @@ Server-side reactive subscriptions: `getAll`, `query`, `distinct`. See [subscrip
 `ServerDb`, `ServerDbCollection`, change stream, `DbContext`. See [providers/db/AGENTS.md](providers/db/AGENTS.md).
 
 ### Auth (`auth/`)
-- `AuthCollection.ts` — MongoDB collection storing device registrations and pending invite tokens
-- `InviteNamespace.ts` — Socket.IO namespace for the WebAuthn invite-link handshake
-- `deviceManagement.ts` — `getDevices`, `enableDevice`, `disableDevice`
-- `useAuth.ts` — server-side hook: `userId`, `token` for the current socket context
-- `registerDevAuthRoute.ts` — dev-only bypass auth route; excluded when `NODE_ENV=production`
+Auth strategy classes (WebAuthn, Google OAuth), invite-link handshake, device management, and context hook. See [auth/AGENTS.md](auth/AGENTS.md).
 
 ### Audit (`audit/`)
 - `toServerAuditOf.ts` — promotes a client `AuditOf` to `ServerAuditOf` by adding `socketId`, `timestamp`
@@ -68,6 +64,7 @@ See [hooks/AGENTS.md](hooks/AGENTS.md) for the full directory. Key exports:
 
 ## Related
 
+- [auth/AGENTS.md](auth/AGENTS.md) — WebAuthn / Google OAuth strategies, invite-link flow, device management
 - [hooks/AGENTS.md](hooks/AGENTS.md) — server hooks (createUseRecord, createUseRecords, useAuditor, useClient)
 - [collections/AGENTS.md](collections/AGENTS.md) — extendCollection and useCollection
 - [actions/AGENTS.md](actions/AGENTS.md) — socket action handlers

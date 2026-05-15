@@ -17,6 +17,7 @@ Neither the client nor the server may import from each other; all cross-layer co
 ### Models (`models/`)
 - `collectionsModels.ts` — `MXDBCollection`, `MXDBCollectionConfig`, `MXDBCollectionIndex`, `QueryProps`, `MongoDocOf`
 - `authModels.ts` — `MXDBUserDetails`, `MXDBDeviceInfo`, auth shapes
+- `hookModels.ts` — shared types for the factory-hook pattern: `RecordTypeOfCollection<C>`, `ExtensionsType`, `RemoveDasherized<Name>` (converts `'order-item'` → `'orderItem'` at the type level). Used by both client and server `createUseRecord` / `createUseRecords`.
 - `internalModels.ts` — library-private types
 - `internalSyncModels.ts` — sync-protocol types shared across layers
 

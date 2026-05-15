@@ -42,9 +42,10 @@ async function start() {
       mongoDbName,
       mongoDbUrl,
       clientLoggingService: () => loggerService,
-      onGetUserDetails: async (userId) => ({
-        id: userId,
-      }),
+      auth: {
+        mode: 'webauthn',
+        onGetUserDetails: async (userId) => ({ id: userId }),
+      },
     });
     configureStaticFiles(app as any);
     configureAuth(app as any, createInvite);

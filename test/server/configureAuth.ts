@@ -6,8 +6,10 @@ const TEST_USER_ID = 'test-user-1';
 
 export function configureAuth(
   app: Koa,
-  createInvite: (options: CreateInviteOptions) => Promise<string>,
+  createInvite: ((options: CreateInviteOptions) => Promise<string>) | undefined,
 ): void {
+  if (createInvite == null) return;
+
   const router = new Router();
 
   router.get('/api/create-invite', async ctx => {

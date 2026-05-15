@@ -5,22 +5,29 @@ export interface MXDBUser extends SocketAPIUser { }
 export interface MXDBAccount extends SocketAPIAccount { }
 
 /**
- * MongoDB `mxdb_authentication` document — one row per registered device.
- * Shape matches socket-api's WebAuthnAuthRecord so AuthCollection can implement
- * WebAuthnAuthStore without an adapter layer.
+ * Base shape for an `mxdb_authentication` document — matches `SocketAPIAuthRecord`.
+ * Used for device-management APIs that work regardless of auth mode.
  */
 export interface MXDBAuthRecord {
   requestId: string;
   userId: string;
-  /** Set by socket-api after WebAuthn registration completes. Empty string on invite records. */
   sessionToken: string;
-  /** Deterministic device fingerprint ID computed by socket-api client. Empty on invite records. */
   deviceId: string;
   deviceDetails?: unknown;
-  keyHash?: string;
   isEnabled: boolean;
-  registrationToken?: string;
   lastConnectedAt?: number;
+  accountId?: string;
+}
+
+/**
+ * Extra fields stored when the server is running in `google-oauth` mode.
+ */
+export interface MXDBGoogleOAuthAuthRecord extends MXDBAuthRecord {
+  googleAccessToken: string;
+  googleRefreshToken: string;
+  /** Unix timestamp (ms) when `googleAccessToken` expires. */
+  googleTokenExpiresAt: number;
+  grantedScopes: string[];
 }
 
 export interface MXDBDeviceInfo {

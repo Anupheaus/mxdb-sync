@@ -17,6 +17,8 @@ interface Props {
   logger?: Logger;
   autoConnect?: boolean;
   collections: MXDBCollection[];
+  /** Defaults to `'webauthn'`. Set to `'google-oauth'` when the server uses Google OAuth. */
+  authMode?: 'webauthn' | 'google-oauth';
   onDeviceDisabled?(): void;
   onSignedIn?(user: MXDBUser): void;
   onSignedOut?(): void;
@@ -31,6 +33,7 @@ export const MXDBSync = createComponent('MXDBSync', ({
   logger,
   autoConnect,
   collections,
+  authMode = 'webauthn',
   onDeviceDisabled,
   onSignedIn,
   onSignedOut,
@@ -49,9 +52,14 @@ export const MXDBSync = createComponent('MXDBSync', ({
 
   const conflictResolutionContext = useMemo(() => ({ onConflictResolution }), [onConflictResolution]);
 
-  const onPrfRef = useRef<((userId: string, prfOutput: ArrayBuffer, accountId?: string) => void | Promise<void>) | undefined>(undefined);
+  const onPrfRef = useRef<
+    ((userId: string, prfOutput: ArrayBuffer, accountId?: string) => void | Promise<void>) | undefined
+  >(undefined);
 
-  const handlePrf = useBound((userId: string, prfOutput: ArrayBuffer, accountId?: string) => onPrfRef.current?.(userId, prfOutput, accountId) ?? undefined);
+  const handlePrf = useBound(
+    (userId: string, prfOutput: ArrayBuffer, accountId?: string) =>
+      onPrfRef.current?.(userId, prfOutput, accountId) ?? undefined,
+  );
   const handleSignedIn = useBound((user: SocketAPIUser) => onSignedIn?.(user as MXDBUser));
 
   return (
@@ -61,13 +69,14 @@ export const MXDBSync = createComponent('MXDBSync', ({
           name={name}
           host={host}
           autoConnect={autoConnect}
-          onPrf={handlePrf}
+          onPrf={authMode === 'webauthn' ? handlePrf : undefined}
           onDeviceDisabled={onDeviceDisabled}
           onSignedIn={onSignedIn != null ? handleSignedIn : undefined}
           onSignedOut={onSignedOut}
         >
           <MXDBSyncInner
             appName={name}
+            authMode={authMode}
             collections={collections}
             onPrfRef={onPrfRef}
             onError={onError}

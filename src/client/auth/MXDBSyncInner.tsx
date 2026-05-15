@@ -11,16 +11,24 @@ import type { MXDBAccount, MXDBUser } from '../../common/models';
 
 interface Props {
   appName: string;
+  authMode: 'webauthn' | 'google-oauth';
   collections: MXDBCollection[];
-  onPrfRef: MutableRefObject<((userId: string, prfOutput: ArrayBuffer, accountId?: string) => void | Promise<void>) | undefined>;
+  onPrfRef: MutableRefObject<
+    ((userId: string, prfOutput: ArrayBuffer, accountId?: string) => void | Promise<void>) | undefined
+  >;
   onError?(error: MXDBError): void;
   onSignedIn?(user: MXDBUser): void;
   onSignedOut?(): void;
   children?: ReactNode;
 }
 
+// Google OAuth has no hardware-backed PRF so local data is unencrypted at rest.
+// All-zero key distinguishes this from the dev-bypass pattern (0xde).
+const GOOGLE_OAUTH_PLACEHOLDER_KEY = new Uint8Array(32).fill(0);
+
 export const MXDBSyncInner = createComponent('MXDBSyncInner', ({
   appName,
+  authMode,
   collections,
   onPrfRef,
   onError,
@@ -39,9 +47,10 @@ export const MXDBSyncInner = createComponent('MXDBSyncInner', ({
   // Dev bypass (non-production only)
   useEffect(() => {
     if (process.env.NODE_ENV === 'production') return;
-    const devJson = typeof localStorage !== 'undefined'
-      ? localStorage.getItem(`mxdb:dev-auth:${appName}`)
-      : null;
+    const devJson =
+      typeof localStorage !== 'undefined'
+        ? localStorage.getItem(`mxdb:dev-auth:${appName}`)
+        : null;
     if (devJson == null) return;
     try {
       const { userId } = JSON.parse(devJson) as { userId: string };
@@ -65,17 +74,19 @@ export const MXDBSyncInner = createComponent('MXDBSyncInner', ({
         setDbName(undefined);
       }
     };
-    return () => { channel.close(); channelRef.current = null; };
+    return () => {
+      channel.close();
+      channelRef.current = null;
+    };
   }, [appName]);
 
-  // Wire onPrf handler into the ref MXDBSync holds
+  // WebAuthn only: wire the PRF handler — called by socket-api after the passkey ceremony
   useEffect(() => {
+    if (authMode !== 'webauthn') return;
     onPrfRef.current = async (userId: string, prfOutput: ArrayBuffer, accountId?: string) => {
       try {
         const key = await deriveKey(prfOutput);
         setEncryptionKey(key);
-        // accountId is used as the DB name when provided so that each account's data is
-        // stored separately; fall back to userId when no account scope is required.
         setDbName(accountId ?? userId);
         reauthInProgressRef.current = false;
       } catch (err) {
@@ -88,8 +99,10 @@ export const MXDBSyncInner = createComponent('MXDBSyncInner', ({
         });
       }
     };
-    return () => { onPrfRef.current = undefined; };
-  }, [onPrfRef, onError]);
+    return () => {
+      onPrfRef.current = undefined;
+    };
+  }, [authMode, onPrfRef, onError]);
 
   // React to user state changes
   useEffect(() => {
@@ -106,8 +119,12 @@ export const MXDBSyncInner = createComponent('MXDBSyncInner', ({
 
     if (user != null && prev == null) {
       onSignedIn?.(user);
+      // Google OAuth: no PRF ceremony — mount DbsProvider immediately on sign-in
+      if (authMode === 'google-oauth') {
+        setDbName(user.id);
+        setEncryptionKey(GOOGLE_OAUTH_PLACEHOLDER_KEY);
+      }
     }
-
   }, [user]); // eslint-disable-line react-hooks/exhaustive-deps
 
   if (encryptionKey == null || dbName == null) {

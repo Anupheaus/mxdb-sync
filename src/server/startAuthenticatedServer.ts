@@ -3,15 +3,23 @@ import { setServerToClientSync } from './providers';
 import { registerClientS2C, unregisterClientS2C } from './providers/db/clientS2CStore';
 import { seedCollections } from './seeding';
 import { internalActions } from './actions';
-import { startServer as startSocketServer, useAction, useAuthentication as useSocketAuthentication } from '@anupheaus/socket-api/server';
+import {
+  startServer as startSocketServer,
+  useAction,
+  useAuthentication as useSocketAuthentication,
+} from '@anupheaus/socket-api/server';
 import { defineAuthentication } from '@anupheaus/socket-api/server';
 import { internalSubscriptions } from './subscriptions';
 import { addClientWatches, removeClientWatches } from './clientDbWatches';
 import { ServerToClientSynchronisation } from './ServerToClientSynchronisation';
-import { AuthCollection } from './auth/AuthCollection';
+import { WebAuthnAuthCollection } from './auth/WebAuthnAuthCollection';
+import { GoogleOAuthAuthCollection } from './auth/GoogleOAuthAuthCollection';
+import { registerDevAuthRoute } from './auth/registerDevAuthRoute';
 import { mxdbServerToClientSyncAction } from '../common/internalActions';
 import type { Socket } from 'socket.io';
-import type { ServerConfig } from './internalModels';
+import type { ServerAuthConfig, ServerConfig } from './internalModels';
+import type { AuthCollection } from './auth/AuthCollection';
+import type { SocketAPIAuthRecord } from '@anupheaus/socket-api/common/auth';
 import { Logger } from '@anupheaus/common';
 import type { MXDBAccount, MXDBUser } from '../common/models';
 
@@ -30,11 +38,34 @@ interface Props extends ServerConfig {
 
 function parseSessionToken(client: Socket): string | undefined {
   const cookieHeader = client.handshake.headers.cookie as string | undefined;
-  const fromCookie = cookieHeader?.split(';').map(s => s.trim())
+  const fromCookie = cookieHeader
+    ?.split(';')
+    .map(s => s.trim())
     .find(s => s.startsWith(`${SESSION_COOKIE_NAME}=`))
     ?.slice(SESSION_COOKIE_NAME.length + 1);
-  const fromAuth = (client.handshake.auth as Record<string, unknown>)?.sessionToken as string | undefined;
+  const fromAuth = (client.handshake.auth as Record<string, unknown>)?.sessionToken as
+    | string
+    | undefined;
   return fromCookie ?? fromAuth;
+}
+
+function buildOnGetUser(authConfig: ServerAuthConfig) {
+  return async (userId: string): Promise<MXDBUser | undefined> => {
+    if (authConfig.onGetUserDetails == null) return { id: userId } as MXDBUser;
+    try {
+      return await authConfig.onGetUserDetails(userId);
+    } catch {
+      return undefined;
+    }
+  };
+}
+
+function createAuthCollection(
+  auth: ServerAuthConfig,
+  db: ServerDb,
+): AuthCollection<SocketAPIAuthRecord> {
+  if (auth.mode === 'webauthn') return new WebAuthnAuthCollection(db);
+  return new GoogleOAuthAuthCollection(db);
 }
 
 export async function startAuthenticatedServer({
@@ -48,15 +79,42 @@ export async function startAuthenticatedServer({
   onClientDisconnected,
   onConnected,
   onDisconnected,
-  onGetUserDetails,
   onGetAccountDetails,
-  onGetInviteDetails,
-  rpId,
+  auth,
   changeStreamDebounceMs,
   ...config
 }: Props) {
-  const { configureAuthentication, useAuthentication } = defineAuthentication<MXDBUser, MXDBAccount>();
-  const authColl = new AuthCollection(db);
+  const { configureAuthentication, useAuthentication } = defineAuthentication<
+    MXDBUser,
+    MXDBAccount
+  >();
+  const authColl = createAuthCollection(auth, db);
+
+  const socketAuth =
+    auth.mode === 'webauthn'
+      ? configureAuthentication({
+          mode: 'webauthn',
+          store: authColl as WebAuthnAuthCollection,
+          rpId: auth.rpId,
+          onGetInviteDetails: async (userId, accountId) => {
+            if (auth.onGetInviteDetails == null)
+              throw new Error('onGetInviteDetails is required for WebAuthn servers');
+            return auth.onGetInviteDetails(userId, accountId);
+          },
+          onGetUser: buildOnGetUser(auth),
+        })
+      : configureAuthentication({
+          mode: 'google-oauth',
+          store: authColl as GoogleOAuthAuthCollection,
+          clientId: auth.clientId,
+          clientSecret: auth.clientSecret,
+          redirectUri: auth.redirectUri,
+          baseScopes: auth.baseScopes,
+          capacitorCallbackUrl: auth.capacitorCallbackUrl,
+          syncUserToClient: auth.syncUserToClient ?? false,
+          onGetUser: buildOnGetUser(auth),
+          onCreateUser: auth.onCreateUser,
+        });
 
   logger?.info('[startAuthenticatedServer] calling startSocketServer');
   const { app } = await startSocketServer({
@@ -64,71 +122,60 @@ export async function startAuthenticatedServer({
     logger,
     actions: [...internalActions, ...(actions ?? [])],
     subscriptions: [...internalSubscriptions, ...(subscriptions ?? [])],
-
-    auth: configureAuthentication({
-      mode: 'webauthn',
-      store: authColl,
-      onGetInviteDetails: async (userId, accountId) => {
-        if (onGetInviteDetails == null) throw new Error('onGetInviteDetails is required for authenticated servers');
-        return onGetInviteDetails(userId, accountId);
-      },
-      onGetUser: async (userId): Promise<MXDBUser | undefined> => {
-        if (onGetUserDetails == null) return { id: userId } as MXDBUser;
-        try { return await onGetUserDetails(userId); }
-        catch { return undefined; }
-      },
-    }),
+    auth: socketAuth,
 
     async onStartup() {
       logger?.info('[startAuthenticatedServer] onStartup.begin');
       const { impersonateUser } = useAuthentication();
-
       await impersonateUser(adminUser, async () => {
-        const startupLogger = (logger ?? Logger.getCurrent() ?? new Logger('mxdb-sync')).createSubLogger('s2c:startup');
-        setServerToClientSync(ServerToClientSynchronisation.createNoOp(collections, startupLogger));
+        const startupLogger = (
+          logger ?? Logger.getCurrent() ?? new Logger('mxdb-sync')
+        ).createSubLogger('s2c:startup');
+        setServerToClientSync(
+          ServerToClientSynchronisation.createNoOp(collections, startupLogger),
+        );
         const startTime = Date.now();
-        if (shouldSeedCollections === true) {
-          await seedCollections(collections);
-        }
+        if (shouldSeedCollections === true) await seedCollections(collections);
         startupLogger.info(`Seeding took ${Date.now() - startTime}ms`);
         if (config.onStartup != null) await config.onStartup();
       });
       logger?.info('[startAuthenticatedServer] onStartup.done');
     },
 
+    onRegisterRoutes: async router => {
+      if (process.env.NODE_ENV !== 'production') {
+        registerDevAuthRoute(router, config.name, authColl, auth.mode);
+      }
+      await config.onRegisterRoutes?.(router);
+    },
+
     onClientConnected: async (client: Socket) => {
       client.once('disconnect', (reason: string) => disconnectReasons.set(client, reason));
+      const socketAuthCtx = useSocketAuthentication<MXDBUser, MXDBAccount>();
 
-      const auth = useSocketAuthentication<MXDBUser, MXDBAccount>();
-
-      if (auth.user != null) {
-        // Hydrate the account from the auth record when the consumer supplies onGetAccountDetails.
-        // validateSessionCookie (in socket-api middleware) only sets the user; we resolve the
-        // account here by looking up the session's auth record to retrieve its accountId.
-        if (auth.account == null && onGetAccountDetails != null) {
+      if (socketAuthCtx.user != null) {
+        if (socketAuthCtx.account == null && onGetAccountDetails != null) {
           const sessionToken = parseSessionToken(client);
           if (sessionToken != null) {
             const record = await authColl.findBySessionToken(sessionToken);
             if (record?.accountId != null) {
-              const resolvedAccount = await onGetAccountDetails(record.accountId).catch(() => undefined);
-              if (resolvedAccount != null) await auth.setAccount(resolvedAccount);
+              const resolvedAccount = await onGetAccountDetails(record.accountId).catch(
+                () => undefined,
+              );
+              if (resolvedAccount != null) await socketAuthCtx.setAccount(resolvedAccount);
             }
           }
         }
-
-        // Re-emit socketAPIUserChanged here (post-connection) to guarantee delivery.
-        // The io.use() middleware emits this event while the socket is still in the
-        // handshake phase; some socket.io configurations may not flush buffered events
-        // reliably. Calling setUser() again here is idempotent on the server and
-        // ensures the client always receives its authenticated user state.
-        await auth.setUser(auth.user);
-        connectedUsers.set(client, auth.user);
-        const currentAccount = auth.account;
+        await socketAuthCtx.setUser(socketAuthCtx.user);
+        connectedUsers.set(client, socketAuthCtx.user);
+        const currentAccount = socketAuthCtx.account;
         if (currentAccount != null) connectedAccounts.set(client, currentAccount);
-        await onConnected?.({ user: auth.user, account: currentAccount });
+        await onConnected?.({ user: socketAuthCtx.user, account: currentAccount });
       }
 
-      const s2cLogger = (logger ?? Logger.getCurrent() ?? new Logger('mxdb-sync')).createSubLogger(`s2c:${client.id}`);
+      const s2cLogger = (
+        logger ?? Logger.getCurrent() ?? new Logger('mxdb-sync')
+      ).createSubLogger(`s2c:${client.id}`);
       const emitS2C = useAction(mxdbServerToClientSyncAction);
       const s2c = new ServerToClientSynchronisation({
         emitS2C: async payload => emitS2C(payload),
@@ -160,7 +207,8 @@ export async function startAuthenticatedServer({
 
       if (user != null) {
         const rawReason = disconnectReasons.get(client) ?? '';
-        const reason = rawReason === 'server namespace disconnect' ? 'signedOut' : 'connectionLost';
+        const reason =
+          rawReason === 'server namespace disconnect' ? 'signedOut' : 'connectionLost';
         disconnectReasons.delete(client);
         await onDisconnected?.({ user, account, reason });
       }

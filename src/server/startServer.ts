@@ -2,7 +2,6 @@ import { provideDb } from './providers';
 import { Logger } from '@anupheaus/common';
 import { startAuthenticatedServer } from './startAuthenticatedServer';
 import { getDevices, enableDevice, disableDevice } from './auth/deviceManagement';
-import { registerDevAuthRoute } from './auth/registerDevAuthRoute';
 import { useAuthentication } from '@anupheaus/socket-api/server';
 import type { ServerConfig, ServerInstance } from './internalModels';
 
@@ -10,47 +9,40 @@ import type { ServerConfig, ServerInstance } from './internalModels';
  * Initialises the MXDB-sync server: connects to MongoDB, starts Socket.IO, registers auth,
  * wires actions/subscriptions, and optionally seeds collections.
  *
- * Async — awaits the MongoDB connection before resolving. Call `instance.close()` to cleanly
- * terminate the MongoDB connection (required in tests to avoid open-handle warnings).
- *
- * @param config - Server configuration including `mongoDbUrl`, `mongoDbName`, `collections`,
- *   `server` (HTTP/HTTPS/HTTP2), `name`, and `onGetUserDetails`.
- * @returns A `ServerInstance` with `createInvite`, `getDevices`, `enableDevice`,
- *   `disableDevice`, and `close`.
+ * `config.auth.mode` selects the authentication strategy:
+ * - `'webauthn'` — passkey-based multi-device auth; exposes `createInvite` on the instance.
+ * - `'google-oauth'` — Google OAuth 2.0; no invite flow.
  */
 export async function startServer(config: ServerConfig): Promise<ServerInstance> {
-  let { logger, name, collections, mongoDbName, mongoDbUrl, changeStreamDebounceMs, onRegisterRoutes } = config;
+  let { logger, name, collections, mongoDbName, mongoDbUrl, changeStreamDebounceMs } = config;
   if (!logger) logger = Logger.getCurrent();
   if (!logger) logger = new Logger('MXDB-Sync');
 
   logger.info('[startServer] begin', { name, mongoDbName, collectionCount: collections.length });
 
-  return logger.provide(() => provideDb(mongoDbName, mongoDbUrl, collections, async db => {
-    logger!.info('[startServer] provideDb — waiting for Mongo');
-    await db.getMongoDb();
-    logger!.info('[startServer] Mongo connected');
+  return logger.provide(() =>
+    provideDb(mongoDbName, mongoDbUrl, collections, async db => {
+      logger!.info('[startServer] provideDb — waiting for Mongo');
+      await db.getMongoDb();
+      logger!.info('[startServer] Mongo connected');
 
-    const { app } = await startAuthenticatedServer({
-      ...config,
-      db,
-      logger,
-      onRegisterRoutes: async router => {
-        await onRegisterRoutes?.(router);
-        if (process.env.NODE_ENV !== 'production') {
-          registerDevAuthRoute(router, name, db);
-        }
-      },
-    });
+      const { app, authColl } = await startAuthenticatedServer({ ...config, db, logger });
 
-    if (app == null) throw new Error('Failed to start server');
+      if (app == null) throw new Error('Failed to start server');
 
-    return {
-      app,
-      createInvite: async options => useAuthentication().createInvite(options),
-      getDevices: async (userId: string) => getDevices(db, userId),
-      enableDevice: async (requestId: string) => enableDevice(db, requestId),
-      disableDevice: async (requestId: string) => disableDevice(db, requestId),
-      close: async () => db.close(),
-    };
-  }, changeStreamDebounceMs));
+      const instance: ServerInstance = {
+        app,
+        getDevices: async (userId: string) => getDevices(authColl, userId),
+        enableDevice: async (requestId: string) => enableDevice(authColl, requestId),
+        disableDevice: async (requestId: string) => disableDevice(authColl, requestId),
+        close: async () => db.close(),
+      };
+
+      if (config.auth.mode === 'webauthn') {
+        instance.createInvite = async options => useAuthentication().createInvite(options);
+      }
+
+      return instance;
+    }, changeStreamDebounceMs),
+  );
 }

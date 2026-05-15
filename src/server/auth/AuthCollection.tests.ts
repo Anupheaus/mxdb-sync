@@ -22,7 +22,6 @@ function makeFakeDb(): ServerDb {
   mockListCollections.mockReturnValue({
     toArray: vi.fn().mockResolvedValue([{ name: 'mxdb_authentication' }]),
   });
-  mockFind.mockReturnValue({ toArray: vi.fn().mockResolvedValue([]) });
   mockGetCollection.mockReturnValue(fakeCollection);
   return {
     getMongoDb: vi.fn().mockResolvedValue({
@@ -39,7 +38,7 @@ beforeEach(async () => {
   vi.clearAllMocks();
   const { AuthCollection } = await import('./AuthCollection');
   // Minimal concrete subclass — satisfies abstract constraint for testing base behaviour
-  ConcreteCollection = class extends (AuthCollection as any)<SocketAPIAuthRecord> { };
+  ConcreteCollection = class extends AuthCollection<SocketAPIAuthRecord> { };
 });
 
 describe('AuthCollection (base class)', () => {

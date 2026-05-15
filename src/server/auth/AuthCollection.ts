@@ -30,11 +30,15 @@ export abstract class AuthCollection<TRecord extends SocketAPIAuthRecord>
   implements SocketAPIAuthStore<TRecord> {
 
   constructor(db: ServerDb) {
-    this._coll = this.#init(db);
+    this.#coll = this.#init(db);
   }
 
-  // Protected so subclasses can reach into it for extra queries.
-  protected _coll: Promise<Collection<AuthDoc<TRecord>>>;
+  #coll: Promise<Collection<AuthDoc<TRecord>>>;
+
+  /** Returns the underlying MongoDB collection. Subclasses use this for extra queries. */
+  protected async getColl(): Promise<Collection<AuthDoc<TRecord>>> {
+    return this.#coll;
+  }
 
   async #init(serverDb: ServerDb): Promise<Collection<AuthDoc<TRecord>>> {
     const db = await serverDb.getMongoDb();
@@ -55,37 +59,37 @@ export abstract class AuthCollection<TRecord extends SocketAPIAuthRecord>
   }
 
   async create(record: TRecord): Promise<void> {
-    const coll = await this._coll;
+    const coll = await this.getColl();
     await coll.insertOne(toDoc(record) as any);
   }
 
   async findById(requestId: string): Promise<TRecord | undefined> {
-    const coll = await this._coll;
+    const coll = await this.getColl();
     const doc = await coll.findOne({ _id: requestId } as any);
     return doc ? fromDoc(doc) : undefined;
   }
 
   async findBySessionToken(token: string): Promise<TRecord | undefined> {
-    const coll = await this._coll;
+    const coll = await this.getColl();
     const doc = await coll.findOne({ sessionToken: token } as any);
     return doc ? fromDoc(doc) : undefined;
   }
 
   async findByDevice(userId: string, deviceId: string): Promise<TRecord | undefined> {
-    const coll = await this._coll;
+    const coll = await this.getColl();
     const doc = await coll.findOne({ userId, deviceId } as any);
     return doc ? fromDoc(doc) : undefined;
   }
 
-  // Not part of SocketAPIAuthStore — internal helper for device management and subclasses.
+  /** Not part of SocketAPIAuthStore. Used by device management to list all records for a user regardless of auth mode. */
   async findAllByUserId(userId: string): Promise<TRecord[]> {
-    const coll = await this._coll;
+    const coll = await this.getColl();
     const docs = await coll.find({ userId } as any).toArray();
     return docs.map(fromDoc);
   }
 
   async update(requestId: string, patch: Partial<TRecord>): Promise<void> {
-    const coll = await this._coll;
+    const coll = await this.getColl();
     const setFields: Record<string, unknown> = {};
     const unsetFields: Record<string, 1> = {};
     for (const [key, value] of Object.entries(patch)) {

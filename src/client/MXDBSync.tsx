@@ -3,7 +3,7 @@ import type { ReactNode } from 'react';
 import { useEffect, useMemo, useRef } from 'react';
 import type { Logger } from '@anupheaus/common';
 import { LoggerProvider } from '@anupheaus/react-ui';
-import type { SocketAPIUser } from '@anupheaus/socket-api/client';
+import type { SocketAPIUser, TokenStorage } from '@anupheaus/socket-api/client';
 import { SocketAPI } from '@anupheaus/socket-api/client';
 import { ConflictResolutionContext } from './providers';
 import { MXDBSyncInner } from './auth/MXDBSyncInner';
@@ -24,6 +24,7 @@ interface Props {
   onSignedOut?(): void;
   onError?(error: MXDBError): void;
   onConflictResolution?(message: string): Promise<boolean>;
+  tokenStorage?: TokenStorage;
   children?: ReactNode;
 }
 
@@ -39,6 +40,7 @@ export const MXDBSync = createComponent('MXDBSync', ({
   onSignedOut,
   onError,
   onConflictResolution,
+  tokenStorage,
   children,
 }: Props) => {
   if (host != null) {
@@ -73,6 +75,7 @@ export const MXDBSync = createComponent('MXDBSync', ({
           onDeviceDisabled={onDeviceDisabled}
           onSignedIn={onSignedIn != null ? handleSignedIn : undefined}
           onSignedOut={onSignedOut}
+          tokenStorage={tokenStorage}
         >
           <MXDBSyncInner
             appName={name}

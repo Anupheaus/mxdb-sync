@@ -37,7 +37,7 @@ export interface GoogleOAuthServerAuthConfig {
 
 export type ServerAuthConfig = WebAuthnServerAuthConfig | GoogleOAuthServerAuthConfig;
 
-export interface ServerConfig extends StartSocketServerConfig {
+export interface ServerConfig extends Omit<StartSocketServerConfig, 'auth'> {
   collections: MXDBCollection[];
   mongoDbUrl: string;
   mongoDbName: string;

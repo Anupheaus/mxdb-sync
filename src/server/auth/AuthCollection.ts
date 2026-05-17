@@ -23,7 +23,7 @@ function toDoc<TRecord extends SocketAPIAuthRecord>(record: TRecord): AuthDoc<TR
 
 function fromDoc<TRecord extends SocketAPIAuthRecord>(doc: AuthDoc<TRecord>): TRecord {
   const { _id, ...rest } = doc;
-  return { requestId: _id, ...rest } as TRecord;
+  return { requestId: _id, ...rest } as unknown as TRecord;
 }
 
 export abstract class AuthCollection<TRecord extends SocketAPIAuthRecord>
@@ -66,26 +66,26 @@ export abstract class AuthCollection<TRecord extends SocketAPIAuthRecord>
   async findById(requestId: string): Promise<TRecord | undefined> {
     const coll = await this.getColl();
     const doc = await coll.findOne({ _id: requestId } as any);
-    return doc ? fromDoc(doc) : undefined;
+    return doc ? fromDoc(doc as AuthDoc<TRecord>) : undefined;
   }
 
   async findBySessionToken(token: string): Promise<TRecord | undefined> {
     const coll = await this.getColl();
     const doc = await coll.findOne({ sessionToken: token } as any);
-    return doc ? fromDoc(doc) : undefined;
+    return doc ? fromDoc(doc as AuthDoc<TRecord>) : undefined;
   }
 
   async findByDevice(userId: string, deviceId: string): Promise<TRecord | undefined> {
     const coll = await this.getColl();
     const doc = await coll.findOne({ userId, deviceId } as any);
-    return doc ? fromDoc(doc) : undefined;
+    return doc ? fromDoc(doc as AuthDoc<TRecord>) : undefined;
   }
 
   /** Not part of SocketAPIAuthStore. Used by device management to list all records for a user regardless of auth mode. */
   async findAllByUserId(userId: string): Promise<TRecord[]> {
     const coll = await this.getColl();
     const docs = await coll.find({ userId } as any).toArray();
-    return docs.map(fromDoc);
+    return docs.map(doc => fromDoc(doc as AuthDoc<TRecord>));
   }
 
   async update(requestId: string, patch: Partial<TRecord>): Promise<void> {

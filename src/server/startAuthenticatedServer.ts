@@ -65,7 +65,7 @@ function createAuthCollection(
   db: ServerDb,
 ): AuthCollection<SocketAPIAuthRecord> {
   if (auth.mode === 'webauthn') return new WebAuthnAuthCollection(db);
-  return new GoogleOAuthAuthCollection(db);
+  return new GoogleOAuthAuthCollection(db) as unknown as AuthCollection<SocketAPIAuthRecord>;
 }
 
 export async function startAuthenticatedServer({
@@ -95,7 +95,6 @@ export async function startAuthenticatedServer({
       ? configureAuthentication({
           mode: 'webauthn',
           store: authColl as WebAuthnAuthCollection,
-          rpId: auth.rpId,
           onGetInviteDetails: async (userId, accountId) => {
             if (auth.onGetInviteDetails == null)
               throw new Error('onGetInviteDetails is required for WebAuthn servers');
@@ -105,7 +104,7 @@ export async function startAuthenticatedServer({
         })
       : configureAuthentication({
           mode: 'google-oauth',
-          store: authColl as GoogleOAuthAuthCollection,
+          store: authColl as unknown as GoogleOAuthAuthCollection,
           clientId: auth.clientId,
           clientSecret: auth.clientSecret,
           redirectUri: auth.redirectUri,
